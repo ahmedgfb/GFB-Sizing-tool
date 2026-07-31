@@ -1,0 +1,1553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GFB Schematic — Cold Water Pipe Sizer</title>
+<style>
+  :root{
+    --rail:#1b2430; --rail-2:#232f3d; --rail-line:#2f3d4e;
+    --ink:#e7ecf3; --ink-dim:#95a2b3; --ink-faint:#64728a;
+    --paper:#f7f8fa; --grid-fine:#e5e9f0; --grid-major:#d0d8e4;
+    --datum:#c7cfdc; --datum-ink:#8a95a6;
+    --pipe:#1f5fd0; --pipe-2:#1747a0;
+    --sel:#f5a623; --warn:#e0362f; --unsized:#9aa4b2;
+    --source:#17795e; --junction:#3a4a5e; --meter:#4a5a6e;
+    --mono:"Consolas","SF Mono",ui-monospace,"Roboto Mono",monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+  }
+  :root.svc-hw{ --pipe:#dd2222; --pipe-2:#a81b1b; --warn:#7d0d14; } /* hot-water sheet: flow = red, over/alert = maroon */
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:var(--sans);color:var(--ink);background:var(--rail);overflow:hidden}
+  #app{display:flex;flex-direction:column;height:100vh}
+
+  /* ---------- toolbar ---------- */
+  header{display:flex;align-items:center;gap:14px;padding:0 16px;height:52px;
+    background:linear-gradient(180deg,#202b39,#1b2430);border-bottom:1px solid var(--rail-line);flex:0 0 auto}
+  .brand{display:flex;flex-direction:column;line-height:1}
+  .brand b{font-size:14px;letter-spacing:.14em;text-transform:uppercase;font-weight:700}
+  .brand span{font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-faint);margin-top:3px}
+  .sep{width:1px;height:26px;background:var(--rail-line)}
+  .toolgroup{display:flex;gap:6px;align-items:center}
+  .toollabel{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-faint);margin-right:2px}
+  button.tool{appearance:none;border:1px solid var(--rail-line);background:var(--rail-2);color:var(--ink);
+    font-family:var(--sans);font-size:12px;padding:7px 11px;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px}
+  button.tool:hover{border-color:#4a5c72;background:#2a3849}
+  button.tool.active{background:var(--sel);border-color:var(--sel);color:#231600;font-weight:600}
+  button.tool.ghost{background:transparent}
+  button.tool .kbd{font-family:var(--mono);font-size:10px;background:rgba(255,255,255,.12);border-radius:3px;padding:1px 4px}
+  button.tool.active .kbd{background:rgba(0,0,0,.15)}
+  select.field,input.field{font-family:var(--sans);font-size:12px;background:var(--rail-2);color:var(--ink);
+    border:1px solid var(--rail-line);border-radius:6px;padding:6px 8px}
+  .spacer{flex:1}
+
+  /* ---------- body split ---------- */
+  #body{display:flex;flex:1;min-height:0}
+  #canvas-wrap{flex:1;position:relative;overflow:hidden;background:var(--paper)}
+  svg#board{display:block;width:100%;height:100%;background:var(--paper)}
+  .hint{position:absolute;left:50%;top:20px;transform:translateX(-50%);pointer-events:none;
+    font-size:12px;color:#7d8a9c;background:rgba(255,255,255,.86);padding:6px 12px;border-radius:20px;
+    border:1px solid #e2e7ee;letter-spacing:.02em;white-space:nowrap}
+
+  /* ---------- properties panel ---------- */
+  #panel{width:330px;flex:0 0 330px;background:var(--rail);border-left:1px solid var(--rail-line);
+    display:flex;flex-direction:column;min-height:0}
+  #panel .phead{padding:14px 16px 10px;border-bottom:1px solid var(--rail-line)}
+  #panel .phead .kicker{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--sel)}
+  #panel .phead h2{margin:5px 0 0;font-size:15px;font-weight:600;letter-spacing:.01em}
+  #panel .pbody{padding:14px 16px;overflow:auto;flex:1}
+  .row{display:flex;gap:8px;margin-bottom:10px}
+  .row>label{flex:1;display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--ink-dim)}
+  .row .field{width:100%}
+  .levels{margin-top:6px;border:1px solid var(--rail-line);border-radius:8px;overflow:hidden}
+  .lvl-head,.lvl-row{display:grid;grid-template-columns:1.3fr .8fr .8fr;gap:0}
+  .lvl-head.b,.lvl-row.b{grid-template-columns:1fr 26px 26px}
+  .lvl-head>div{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);
+    padding:7px 8px;background:var(--rail-2);border-bottom:1px solid var(--rail-line)}
+  .lvl-row>*{border-bottom:1px solid var(--rail-line)}
+  .lvl-row input{width:100%;border:none;background:transparent;color:var(--ink);font-family:var(--mono);
+    font-size:12px;padding:6px 8px}
+  .lvl-row input:focus{outline:2px solid var(--sel);outline-offset:-2px;background:#111922}
+  .lvl-row .lname{font-family:var(--sans);font-size:11px;color:var(--ink-dim);padding:6px 8px;display:flex;align-items:center}
+  .lvl-row.ground .lname,.lvl-row.ground input{color:#ffd479}
+  .dn{font-family:var(--mono);font-size:10px;color:var(--pipe);padding:2px 8px 4px;border-bottom:1px solid var(--rail-line);display:block}
+  .dn.warn{color:var(--warn)}
+  .dn.feed{color:var(--sel)}
+  .xbtn{border:none;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:14px;line-height:1}
+  .xbtn:hover{color:var(--warn)}
+  .xbtn.add:hover{color:#6fd3a6}
+  .addlvl{margin-top:8px;width:100%;justify-content:center}
+  .readout{font-family:var(--mono);font-size:12px;background:var(--rail-2);border:1px solid var(--rail-line);
+    border-radius:8px;padding:10px 12px;line-height:1.7}
+  .readout .k{color:var(--ink-faint)}
+  .readout .v{color:var(--ink);float:right}
+  .readout .v.warn{color:var(--warn)}
+  .empty{color:var(--ink-dim);font-size:12px;line-height:1.6}
+  .empty ul{padding-left:16px;margin:8px 0}
+  .empty li{margin:3px 0}
+  .sect{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-faint);margin:16px 0 6px}
+  .sect:first-child{margin-top:0}
+  kbd{font-family:var(--mono);font-size:10px;background:var(--rail-2);border:1px solid var(--rail-line);border-radius:3px;padding:1px 5px}
+
+  /* ---------- job setup overlay ---------- */
+  #setup,#riserdlg{position:fixed;inset:0;background:rgba(14,19,26,.92);z-index:50;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:40px 20px}
+  #setup.hidden,#riserdlg.hidden{display:none}
+  .card{background:var(--rail);border:1px solid var(--rail-line);border-radius:14px;max-width:860px;width:100%;padding:26px 30px 30px;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+  .card h1{margin:0;font-size:18px;letter-spacing:.05em}
+  .card .sub{color:var(--ink-dim);font-size:12px;margin:6px 0 18px}
+  .cols{display:flex;gap:26px;flex-wrap:wrap}
+  .col{flex:1;min-width:250px}
+  .setrow{display:flex;gap:10px;margin-bottom:10px}
+  .setrow>label{flex:1;display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--ink-dim)}
+  .riser-grid{border:1px solid var(--rail-line);border-radius:8px;overflow:hidden;margin-top:6px}
+  .rg-head,.rg-row{display:grid;grid-template-columns:1.4fr 1fr 1fr .8fr 26px}
+  .rg-head>div{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);padding:7px 8px;background:var(--rail-2);border-bottom:1px solid var(--rail-line)}
+  .rg-row>*{border-bottom:1px solid var(--rail-line)}
+  .rg-row input,.rg-row select{width:100%;border:none;background:transparent;color:var(--ink);font-family:var(--mono);font-size:12px;padding:6px 8px}
+  .rg-row select{font-family:var(--sans)}
+  .rg-row select option{background:var(--rail-2)}
+  .rg-row input:focus,.rg-row select:focus{outline:2px solid var(--sel);outline-offset:-2px;background:#111922}
+  .start{margin-top:22px;display:flex;gap:10px;justify-content:flex-end}
+  button.primary{background:var(--sel);border:1px solid var(--sel);color:#231600;font-weight:700;font-size:13px;padding:10px 22px;border-radius:8px;cursor:pointer}
+  button.primary:hover{filter:brightness(1.08)}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand"><b>GFB Schematic</b><span>Cold Water · Pipe Sizer</span></div>
+    <div class="sep"></div>
+    <div class="toolgroup">
+      <span class="toollabel">Sheet</span>
+      <button class="tool active" data-svc="cw">Cold</button>
+      <button class="tool" data-svc="hw">Hot</button>
+    </div>
+    <div class="sep"></div>
+    <div class="toolgroup">
+      <span class="toollabel">Add</span>
+      <button class="tool" data-add="source">◆ Source</button>
+      <button class="tool" data-add="plant">▧ HW Plant</button>
+      <button class="tool" data-add="riser">▮ Riser</button>
+      <button class="tool" data-add="junction">● Tee</button>
+    </div>
+    <div class="sep"></div>
+    <div class="toolgroup">
+      <button class="tool active" id="mode-select">▲ Select <span class="kbd">Esc</span></button>
+      <button class="tool" id="mode-draw">⤳ Pipe <span class="kbd">L</span></button>
+      <button class="tool" id="mode-fillet">⌐ Fillet <span class="kbd">F</span></button>
+      <button class="tool ghost" id="btn-delete">🗑 <span class="kbd">Del</span></button>
+      <button class="tool ghost" id="btn-fit" title="Zoom extents (Z). Wheel = zoom, middle- or right-drag = pan">⛶ Fit <span class="kbd">Z</span></button>
+    </div>
+    <div class="sep"></div>
+    <div class="toolgroup">
+      <span class="toollabel">Main</span>
+      <select class="field" id="net-material">
+        <option value="copper_type_b">Copper Type B</option>
+        <option value="stainless_steel">Stainless Steel</option>
+      </select>
+      <input class="field" id="net-vel" type="number" step="0.1" min="0.1" style="width:70px" title="Max velocity (m/s)">
+      <span class="toollabel">m/s</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="toolgroup">
+      <button class="tool ghost" id="btn-setup">▤ Job setup</button>
+      <button class="tool ghost" id="btn-hwsetup" style="display:none">♨ HW setup</button>
+      <button class="tool ghost" id="btn-save">⭳ Save</button>
+      <button class="tool ghost" id="btn-load">⭱ Load</button>
+      <input type="file" id="file-input" accept="application/json" style="display:none">
+    </div>
+  </header>
+
+  <div id="body">
+    <div id="canvas-wrap">
+      <svg id="board" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="hint" id="hint"></div>
+    </div>
+    <aside id="panel">
+      <div class="phead"><div class="kicker" id="p-kicker">Building</div><h2 id="p-title">Nothing selected</h2></div>
+      <div class="pbody" id="p-body"></div>
+    </aside>
+  </div>
+</div>
+
+<!-- ============ job setup overlay ============ -->
+<div id="setup" class="hidden">
+  <div class="card">
+    <h1>JOB SETUP</h1>
+    <div class="sub">Describe the job — levels, risers and demand — then start the high-level schematic. Everything can still be edited on the drawing.</div>
+    <div class="cols">
+      <div class="col">
+        <div class="sect">Job</div>
+        <div class="setrow">
+          <label>Job name<input class="field" id="s-jobname" placeholder="e.g. XH residential tower"></label>
+          <label>Job no.<input class="field" id="s-jobno" placeholder="e.g. XH_3003" style="width:110px"></label>
+        </div>
+        <div class="sect">Levels</div>
+        <div class="setrow">
+          <label>Basements<input class="field" id="s-basements" type="number" min="0" max="6" value="0"></label>
+          <label>Levels above ground<input class="field" id="s-levels" type="number" min="0" max="60" value="5"></label>
+        </div>
+        <div class="levels" id="s-levellist"></div>
+        <p class="empty" style="margin-top:6px">Use <b>＋</b> on a row to insert a mezzanine above it, <b>×</b> to remove, or rename any level.</p>
+        <div class="sect">Network</div>
+        <div class="setrow">
+          <label>Material
+            <select class="field" id="s-material">
+              <option value="copper_type_b">Copper Type B</option>
+              <option value="stainless_steel">Stainless Steel</option>
+            </select>
+          </label>
+          <label>Max velocity (m/s)<input class="field" id="s-vel" type="number" step="0.1" min="0.1" value="2.5"></label>
+        </div>
+      </div>
+      <div class="col">
+        <div class="sect">Risers</div>
+        <div class="riser-grid" id="s-risers"></div>
+        <button class="tool addlvl" id="s-addriser">+ Add riser</button>
+        <p class="empty" style="margin-top:8px">"Dw / level" is applied to every level the riser serves — fine-tune per level on the drawing afterwards (LU and extra flows too).</p>
+      </div>
+    </div>
+    <div class="start">
+      <button class="tool ghost" id="s-cancel" style="display:none">Cancel</button>
+      <button class="primary" id="s-start">Start drawing →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ new riser dialog ============ -->
+<div id="riserdlg" class="hidden">
+  <div class="card" style="max-width:430px;margin-top:60px">
+    <h1>NEW RISER</h1>
+    <div class="sub">Where does this riser start, and what does it serve?</div>
+    <div class="setrow"><label>Name<input class="field" id="r-name"></label></div>
+    <div class="setrow">
+      <label>Starts at<select class="field" id="r-start"></select></label>
+      <label>Top level<select class="field" id="r-top"></select></label>
+    </div>
+    <div class="setrow"><label>Dwellings per level<input class="field" id="r-dw" type="number" min="0" value="4"></label></div>
+    <div class="setrow"><label style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="r-conn" checked style="width:auto;margin:0"> Auto-connect to the nearest source / riser</label></div>
+    <div class="start">
+      <button class="tool ghost" id="r-cancel">Cancel</button>
+      <button class="primary" id="r-add">Add riser →</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ====================== embedded reference data (from GFB workbook) ======================
+const PSFR = [{"LU":0,"flow_Ls":0},{"LU":1,"flow_Ls":0.1},{"LU":2,"flow_Ls":0.12},{"LU":3,"flow_Ls":0.15},{"LU":4,"flow_Ls":0.18},{"LU":5,"flow_Ls":0.21},{"LU":6,"flow_Ls":0.23},{"LU":7,"flow_Ls":0.24},{"LU":8,"flow_Ls":0.25},{"LU":9,"flow_Ls":0.26},{"LU":10,"flow_Ls":0.27},{"LU":11,"flow_Ls":0.28},{"LU":12,"flow_Ls":0.29},{"LU":13,"flow_Ls":0.3},{"LU":14,"flow_Ls":0.31},{"LU":15,"flow_Ls":0.32},{"LU":16,"flow_Ls":0.33},{"LU":17,"flow_Ls":0.34},{"LU":18,"flow_Ls":0.35},{"LU":19,"flow_Ls":0.36},{"LU":20,"flow_Ls":0.38},{"LU":30,"flow_Ls":0.42},{"LU":40,"flow_Ls":0.45},{"LU":50,"flow_Ls":0.52},{"LU":60,"flow_Ls":0.64},{"LU":70,"flow_Ls":0.73},{"LU":80,"flow_Ls":0.83},{"LU":90,"flow_Ls":0.92},{"LU":100,"flow_Ls":1},{"LU":110,"flow_Ls":1.1},{"LU":120,"flow_Ls":1.2},{"LU":130,"flow_Ls":1.27},{"LU":140,"flow_Ls":1.35},{"LU":150,"flow_Ls":1.42},{"LU":160,"flow_Ls":1.5},{"LU":170,"flow_Ls":1.57},{"LU":180,"flow_Ls":1.65},{"LU":190,"flow_Ls":1.72},{"LU":200,"flow_Ls":1.8},{"LU":240,"flow_Ls":1.97},{"LU":280,"flow_Ls":2.2},{"LU":320,"flow_Ls":2.42},{"LU":360,"flow_Ls":2.57},{"LU":400,"flow_Ls":2.73},{"LU":440,"flow_Ls":2.95},{"LU":480,"flow_Ls":3.1},{"LU":520,"flow_Ls":3.26},{"LU":560,"flow_Ls":3.41},{"LU":600,"flow_Ls":3.48},{"LU":640,"flow_Ls":3.64},{"LU":680,"flow_Ls":3.79},{"LU":720,"flow_Ls":3.86},{"LU":760,"flow_Ls":4.01},{"LU":800,"flow_Ls":4.09},{"LU":840,"flow_Ls":4.17},{"LU":880,"flow_Ls":4.32},{"LU":920,"flow_Ls":4.39},{"LU":960,"flow_Ls":4.47},{"LU":1000,"flow_Ls":4.54},{"LU":1040,"flow_Ls":4.7},{"LU":1080,"flow_Ls":4.77},{"LU":1120,"flow_Ls":4.85},{"LU":1160,"flow_Ls":5},{"LU":1200,"flow_Ls":5.07},{"LU":1240,"flow_Ls":5.15},{"LU":1280,"flow_Ls":5.23},{"LU":1320,"flow_Ls":5.38},{"LU":1360,"flow_Ls":5.45},{"LU":1400,"flow_Ls":5.53},{"LU":1440,"flow_Ls":5.6},{"LU":1480,"flow_Ls":5.68},{"LU":1520,"flow_Ls":5.76},{"LU":1560,"flow_Ls":5.91},{"LU":1600,"flow_Ls":5.98},{"LU":1640,"flow_Ls":6.06},{"LU":1680,"flow_Ls":6.13},{"LU":1720,"flow_Ls":6.29},{"LU":1760,"flow_Ls":6.36},{"LU":1800,"flow_Ls":6.44},{"LU":1840,"flow_Ls":6.51},{"LU":1880,"flow_Ls":6.66},{"LU":1920,"flow_Ls":6.74},{"LU":1960,"flow_Ls":6.82},{"LU":2000,"flow_Ls":6.89},{"LU":2040,"flow_Ls":7.04},{"LU":2080,"flow_Ls":7.12},{"LU":2120,"flow_Ls":7.19},{"LU":2160,"flow_Ls":7.27},{"LU":2200,"flow_Ls":7.42},{"LU":2240,"flow_Ls":7.5},{"LU":2280,"flow_Ls":7.57},{"LU":2320,"flow_Ls":7.65},{"LU":2360,"flow_Ls":7.8},{"LU":2400,"flow_Ls":7.88},{"LU":2440,"flow_Ls":7.95},{"LU":2480,"flow_Ls":8.03},{"LU":2520,"flow_Ls":8.18},{"LU":2560,"flow_Ls":8.25},{"LU":2600,"flow_Ls":8.33},{"LU":2640,"flow_Ls":8.48},{"LU":2680,"flow_Ls":8.56},{"LU":2720,"flow_Ls":8.63},{"LU":2760,"flow_Ls":8.71},{"LU":2800,"flow_Ls":8.78},{"LU":2840,"flow_Ls":8.94},{"LU":2880,"flow_Ls":9.01},{"LU":2920,"flow_Ls":9.09},{"LU":2960,"flow_Ls":9.24},{"LU":3000,"flow_Ls":9.31},{"LU":3040,"flow_Ls":9.39},{"LU":3080,"flow_Ls":9.47},{"LU":3120,"flow_Ls":9.54},{"LU":3160,"flow_Ls":9.69},{"LU":3200,"flow_Ls":9.77},{"LU":3240,"flow_Ls":9.84},{"LU":3280,"flow_Ls":9.92},{"LU":3320,"flow_Ls":10},{"LU":3360,"flow_Ls":10.15},{"LU":3400,"flow_Ls":10.22},{"LU":3440,"flow_Ls":10.3},{"LU":3480,"flow_Ls":10.45},{"LU":3520,"flow_Ls":10.53},{"LU":3560,"flow_Ls":10.6},{"LU":3600,"flow_Ls":10.68},{"LU":3640,"flow_Ls":10.83},{"LU":3680,"flow_Ls":10.91},{"LU":3720,"flow_Ls":10.98},{"LU":3760,"flow_Ls":11.06},{"LU":3800,"flow_Ls":11.13},{"LU":3840,"flow_Ls":11.28},{"LU":3880,"flow_Ls":11.36},{"LU":3920,"flow_Ls":11.44},{"LU":3960,"flow_Ls":11.51},{"LU":4000,"flow_Ls":11.66}];
+const PIPE_TABLES = {"stainless_steel":[{"ID_mm":13,"DN":15},{"ID_mm":19.5,"DN":22},{"ID_mm":25.6,"DN":28},{"ID_mm":32,"DN":35},{"ID_mm":39,"DN":42},{"ID_mm":51,"DN":54},{"ID_mm":72.1,"DN":76},{"ID_mm":84.9,"DN":89},{"ID_mm":104,"DN":108},{"ID_mm":135,"DN":140}],"copper_type_b":[{"ID_mm":10.88,"DN":15},{"ID_mm":17,"DN":20},{"ID_mm":23,"DN":25},{"ID_mm":29.3,"DN":32},{"ID_mm":35.7,"DN":40},{"ID_mm":48.4,"DN":50},{"ID_mm":61.1,"DN":65},{"ID_mm":72.9,"DN":80},{"ID_mm":98.3,"DN":100},{"ID_mm":148.3,"DN":150}]};
+const DEFAULT_MAX_VEL = 2.5;
+// Hot-water demand: flow (L/s) per number of dwellings served, from the workbook "HOT WATER DATA"
+// sheet (A2:B101). Index = dwelling count (element 0 unused). Beyond 100 the HW CALCS sheet falls
+// back to the cold-water dwelling curve (see hwFlowFromDwellings). No loading-unit term for HW.
+const HW_PER_DWELLING = [0,
+  0.40,0.56,0.67,0.75,0.78,0.80,0.82,0.83,0.85,0.87,
+  0.89,0.90,0.97,1.05,1.13,1.20,1.28,1.35,1.43,1.50,
+  1.58,1.65,1.73,1.80,1.88,1.95,2.03,2.10,2.18,2.25,
+  2.33,2.40,2.48,2.55,2.63,2.70,2.78,2.85,2.93,3.00,
+  3.08,3.15,3.23,3.30,3.38,3.45,3.53,3.60,3.68,3.75,
+  3.83,3.90,3.98,4.05,4.13,4.20,4.28,4.35,4.43,4.50,
+  4.58,4.65,4.73,4.80,4.88,4.95,5.03,5.10,5.18,5.25,
+  5.33,5.40,5.48,5.55,5.63,5.70,5.78,5.85,5.93,6.00,
+  6.08,6.15,6.25,6.30,6.38,6.45,6.53,6.60,6.68,6.75,
+  6.83,6.90,6.98,7.05,7.13,7.20,7.28,7.35,7.43,7.50];
+
+// ====================== sizing engine (ported from the Python engine) ======================
+function flowFromDwellings(n){ if(!n) return 0; return 0.03*n + 0.4554*Math.sqrt(n); }
+function flowFromLU(lu){
+  if(!lu) return 0;
+  for(const r of PSFR){ if(r.LU >= lu) return r.flow_Ls; }
+  return PSFR[PSFR.length-1].flow_Ls;
+}
+// Hot-water dwelling demand: HOT WATER DATA table (floor match) up to 100 dwellings, then the
+// cold-water dwelling curve beyond the table — mirrors the "FLOW" formula on the HW CALCS sheet.
+function hwFlowFromDwellings(n){
+  if(!n||n<=0) return 0;
+  const i=Math.floor(n);
+  if(i<=100) return HW_PER_DWELLING[i]||0;
+  return 0.03*n + 0.4554*Math.sqrt(n);
+}
+function areaM2(idmm){ const r=(idmm/1000)/2; return Math.PI*r*r; }
+function velocityMs(flowLs, idmm){ if(!idmm) return NaN; return (flowLs/(((idmm/2000)**2)*Math.PI))/1000; }
+function maxFlowForVel(idmm, vmax){ return areaM2(idmm)*vmax*1000; }
+function pipeTable(material){ return material==='stainless_steel'?PIPE_TABLES.stainless_steel:PIPE_TABLES.copper_type_b; }
+function selectPipe(flowLs, material, vmax){
+  const table=[...pipeTable(material)].sort((a,b)=>a.ID_mm-b.ID_mm);
+  if(flowLs==null||flowLs<=0) return table[0];
+  for(const p of table){ if(maxFlowForVel(p.ID_mm,vmax)>=flowLs) return p; }
+  return null; // over capacity
+}
+function phi(dn){ return dn!=null ? ('Ø'+dn) : null; } // drawing callout style, e.g. Ø28
+
+// per-service demand + labels; each sheet (cold water / hot water) sizes independently.
+// hot water uses the per-dwelling table with no loading-unit term (see HW CALCS in the workbook).
+const SERVICE_DEF = {
+  cw:{ label:'CW', title:'COLD WATER SCHEMATIC — PIPE SIZING',
+       demand:(dw,lu,ex,pump)=>Math.max(flowFromDwellings(dw),pump)+flowFromLU(lu)+ex },
+  hw:{ label:'HW', title:'HOT WATER SCHEMATIC — PIPE SIZING',
+       demand:(dw,lu,ex,pump)=>Math.max(hwFlowFromDwellings(dw),pump)+ex }
+};
+function curDef(){ return SERVICE_DEF[state.activeService]||SERVICE_DEF.cw; }
+
+// per-level entry on a riser: {dwellings, lu, extra, pump}, indexed by building level (0 = lowest)
+function blankLevel(){ return {dwellings:0, lu:0, extra:0, pump:0}; }
+function levelHasDemand(L){ return L && ((+L.dwellings||0)>0 || (+L.lu||0)>0 || (+L.extra||0)>0 || (+L.pump||0)>0); }
+// the riser's base is its explicit start level; demand below it is ignored
+function riserStartIdx(n){
+  const s = n.start!=null ? n.start : state.building.groundIdx;
+  return Math.max(0, Math.min(levelCount()-1, s));
+}
+// levels where pipes attach to this riser — connections are allowed at ANY level,
+// and the riser extends itself (pass-through segments) to reach them
+function riserAttachLevels(n){
+  const ls=[];
+  curSvc().pipes.forEach(p=>{ [p.a,p.b].forEach(att=>{
+    if(att&&att.node===n.id&&att.level!=null) ls.push(Math.max(0,Math.min(levelCount()-1,att.level))); }); });
+  return ls;
+}
+function riserBotIdx(n){ // drawn extent: start level or lowest connection, whichever is lower
+  const a=riserAttachLevels(n);
+  return Math.min(riserStartIdx(n), a.length?Math.min(...a):Infinity);
+}
+function riserTopIdx(n){ // drawn extent: highest of demand, start, and connections
+  const s=riserStartIdx(n); let t=s;
+  for(let i=n.data.length-1;i>s;i--){ if(levelHasDemand(n.data[i])){ t=i; break; } }
+  const a=riserAttachLevels(n);
+  return a.length? Math.max(t,...a) : t;
+}
+
+// base flow of a riser = diversified demand of everything it serves (from its start level up)
+function riserBaseFlow(node){
+  let dw=0, lu=0, extra=0, pump=0;
+  for(let i=riserStartIdx(node);i<node.data.length;i++){ const L=node.data[i];
+    dw+=(+L.dwellings||0); lu+=(+L.lu||0); extra+=(+L.extra||0); pump=Math.max(pump,+L.pump||0); }
+  return curDef().demand(dw, lu, extra, pump);
+}
+
+// segment sizing, aware of where the riser is fed and of flow exported to other risers.
+// returns one entry per pipe segment between level i and i+1, for i in [bot, top-1].
+// exports = {levelIdx: L/s leaving the riser at that level to feed downstream nodes}
+// demand below the start level is excluded; pass-through segments still carry exports.
+function riserSegments(n, feed, exports, bot, top){
+  const mat=n.material||curSvc().network.material, vmax=n.maxVelocity||curSvc().network.maxVelocity;
+  const s0=riserStartIdx(n);
+  const grp=(a,b)=>{ let dw=0,lu=0,ex=0,pump=0,er=0;
+    for(let i=a;i<=b;i++){ const d= i>=s0 ? (n.data[i]||{}) : {};
+      dw+=(+d.dwellings||0); lu+=(+d.lu||0); ex+=(+d.extra||0); pump=Math.max(pump,+d.pump||0); er+=exports[i]||0; }
+    return curDef().demand(dw,lu,ex,pump)+er; };
+  const out=[];
+  for(let i=bot;i<top;i++){
+    const flow = i>=feed ? grp(i+1,top) : grp(bot,i);
+    const pipe=selectPipe(flow,mat,vmax); const v=pipe?velocityMs(flow,pipe.ID_mm):NaN;
+    out.push({i, flow, dn:pipe?pipe.DN:null, vel:v, over: pipe? v>vmax : true});
+  }
+  return out;
+}
+
+// ====================== state ======================
+function defaultLevelNames(basements, above){
+  const a=[]; for(let i=basements;i>=1;i--) a.push('B'+i);
+  a.push('GROUND'); for(let i=1;i<=above;i++) a.push('LEVEL '+i);
+  return a;
+}
+let state = {
+  building:{job:{name:'',number:''}, levels:defaultLevelNames(0,5), groundIdx:0},
+  nextId:1,
+  activeService:'cw',
+  services:{
+    cw:{ network:{material:'copper_type_b',maxVelocity:DEFAULT_MAX_VEL}, nodes:[], pipes:[] },
+    hw:{ network:{material:'copper_type_b',maxVelocity:1.2}, nodes:[], pipes:[] }
+  }
+};
+// active-sheet accessor: nodes / pipes / network live per service under state.services
+function curSvc(){ return state.services[state.activeService]; }
+function allServiceSlices(){ return Object.keys(state.services).map(k=>state.services[k]); }
+function plantKicker(n){ return {gas_central:'GAS · CENTRAL',gas_individual:'GAS · INDIVIDUAL',elec_central:'ELEC · CENTRAL',elec_individual:'ELEC · INDIVIDUAL'}[n&&n.plantType] || '◧ HW PLANT'; }
+// pipes: {id, pts:[{x,y}...], a:{node,level?}|null, b:{node,level?}|null} — a/b are attachments; free ends are null
+let ui = { mode:'select', selKind:null, selId:null, drag:null, draft:null, hover:null, filletFirst:null, pan:null };
+let riserInfo = {}; // {riserId: {feed, exports}} — refreshed by sizePipes()
+let view = { x:0, y:0, scale:1 }; // AutoCAD-style viewport: world coords of top-left + zoom
+
+const GRID=20, LEVEL_PX=80, SHEET_TOP=70, SHEET_LEFT=20, YARD=300;
+function nid(){ return state.nextId++; }
+function snap(v){ return Math.round(v/GRID)*GRID; }
+function getNode(id){ return curSvc().nodes.find(n=>n.id===id); }
+function getPipe(id){ return curSvc().pipes.find(p=>p.id===id); }
+function levelCount(){ return state.building.levels.length; }
+function levelY(i){ return SHEET_TOP + (levelCount()-i)*LEVEL_PX; }
+function takeoffY(i){ return levelY(i+1)+16; } // branch runs near the top of the level; meters drop down from it
+function sheetBottomY(){ return levelY(0); }
+function syncRiserData(n){
+  while(n.data.length < levelCount()) n.data.push(blankLevel());
+  if(n.data.length > levelCount()) n.data.length = levelCount();
+}
+function allRisers(){ return curSvc().nodes.filter(n=>n.type==='riser'); }
+function eachRiserAll(fn){ allServiceSlices().forEach(s=>s.nodes.forEach(n=>{ if(n.type==='riser') fn(n); })); } // every service's risers — level ops span sheets
+function clampLevel(n,li){ return Math.max(0, Math.min(levelCount()-1, li==null?riserStartIdx(n):li)); } // any level is attachable
+function nearestLevelForY(y){
+  let best=0, bd=Infinity;
+  for(let i=0;i<levelCount();i++){ const d=Math.abs(takeoffY(i)-y); if(d<bd){ bd=d; best=i; } }
+  return best;
+}
+
+// resolve an attachment to canvas coordinates.
+// on a riser, connections sit a little ABOVE the level's meter branch so they stay visually separate.
+function riserAttachOffset(n,li){ return levelHasDemand(n.data[li]) ? 14 : 0; }
+function attachPoint(att){
+  if(!att) return null;
+  const n=getNode(att.node); if(!n) return null;
+  if(n.type==='riser'){ const li=clampLevel(n,att.level); return {x:n.x, y:takeoffY(li)-riserAttachOffset(n,li)}; }
+  return {x:n.x, y:n.y};
+}
+// pipe geometry: stored waypoints with endpoints re-derived from live attachments
+function pipePts(p){
+  const pts=p.pts.map(q=>({x:q.x,y:q.y}));
+  const fix=(idx)=>{
+    const att= idx===0?p.a:p.b; const target=attachPoint(att); if(!target) return;
+    const old={...pts[idx]}; pts[idx]=target;
+    const nIdx= idx===0?1:pts.length-2;
+    if(pts.length>=2 && nIdx>=0 && nIdx<pts.length && nIdx!==idx){
+      const nb=pts[nIdx];
+      // never drag the other end off its own attachment — the corner pass below re-routes instead
+      const nbIsAttachedEnd = (nIdx===0&&p.a) || (nIdx===pts.length-1&&p.b);
+      if(!nbIsAttachedEnd){
+        if(Math.abs(old.x-nb.x)<0.5) nb.x=target.x;      // end segment was vertical
+        else if(Math.abs(old.y-nb.y)<0.5) nb.y=target.y; // end segment was horizontal
+      }
+    }
+  };
+  fix(0); fix(pts.length-1);
+  // restore orthogonality: insert a corner wherever a move created a diagonal segment
+  const out=[pts[0]];
+  for(let i=1;i<pts.length;i++){
+    const a=out[out.length-1], b=pts[i];
+    if(Math.abs(a.x-b.x)>0.5 && Math.abs(a.y-b.y)>0.5) out.push({x:a.x,y:b.y});
+    out.push(b);
+  }
+  return dedupe(out);
+}
+
+// ====================== graph sizing (accumulate demand toward source) ======================
+function sizePipes(){
+  const res={}; curSvc().pipes.forEach(p=>res[p.id]={flow:null,dn:null,vel:null,over:false,unsized:true});
+  riserInfo={};
+  curSvc().nodes.forEach(n=>{ if(n.type==='riser') riserInfo[n.id]={feed:null,exports:{}}; });
+  const sources=curSvc().nodes.filter(n=>n.type==='source'||n.type==='plant'); // hot-water plant feeds like a source
+  const adj={}; curSvc().nodes.forEach(n=>adj[n.id]=[]);
+  curSvc().pipes.forEach(p=>{
+    if(p.a&&p.b&&adj[p.a.node]&&adj[p.b.node]){
+      adj[p.a.node].push({p,o:p.b.node,oAtt:p.b,uAtt:p.a});
+      adj[p.b.node].push({p,o:p.a.node,oAtt:p.a,uAtt:p.b});
+    }
+  });
+  const parent={},pPipe={},pAttU={},seen=new Set(),order=[],q=[];
+  sources.forEach(s=>{ seen.add(s.id); q.push(s.id); parent[s.id]=null; });
+  while(q.length){ const u=q.shift(); order.push(u);
+    for(const {p,o,oAtt,uAtt} of adj[u]){ if(!seen.has(o)){
+      seen.add(o); parent[o]=u; pPipe[o]=p; pAttU[o]=uAtt; q.push(o);
+      const on=getNode(o);
+      if(on&&on.type==='riser') riserInfo[o].feed=clampLevel(on, oAtt.level);
+    } } }
+  const demand={}; curSvc().nodes.forEach(n=>demand[n.id]= n.type==='riser'?riserBaseFlow(n):0);
+  for(let i=order.length-1;i>=0;i--){ const u=order[i]; if(parent[u]!=null){
+    demand[parent[u]]+=demand[u];
+    const pn=getNode(parent[u]);
+    if(pn&&pn.type==='riser'){ // flow leaving this riser at the attachment level, to feed the subtree
+      const lvl=clampLevel(pn, pAttU[u].level);
+      riserInfo[parent[u]].exports[lvl]=(riserInfo[parent[u]].exports[lvl]||0)+demand[u];
+    }
+  }}
+  const mat=curSvc().network.material, vmax=curSvc().network.maxVelocity;
+  curSvc().nodes.forEach(n=>{ const pp=pPipe[n.id]; if(pp){ const f=demand[n.id];
+    if(f>1e-9){ const pipe=selectPipe(f,mat,vmax); const v=pipe?velocityMs(f,pipe.ID_mm):NaN;
+      res[pp.id]={flow:f,dn:pipe?pipe.DN:null,vel:v,over:pipe?v>vmax:true,unsized:false}; } }});
+  return res;
+}
+
+// ====================== rendering ======================
+const board=document.getElementById('board');
+const SVGNS='http://www.w3.org/2000/svg';
+function el(tag,attrs={},kids=[]){ const e=document.createElementNS(SVGNS,tag);
+  for(const k in attrs) e.setAttribute(k,attrs[k]); kids.forEach(c=>e.appendChild(c)); return e; }
+function txt(x,y,s,attrs={}){ const t=el('text',Object.assign({x,y},attrs)); t.textContent=s; return t; }
+
+// white outline behind drawing text so gridlines never bleed through
+function haloed(a){ return Object.assign({stroke:'#f7f8fa','stroke-width':3.5,'paint-order':'stroke','stroke-linejoin':'round'},a); }
+
+// size of the meter branch serving a single level's own demand
+function levelBranch(n,i){
+  const d=n.data[i]||{};
+  const flow=curDef().demand(+d.dwellings||0,+d.lu||0,+d.extra||0,+d.pump||0);
+  const mat=n.material||curSvc().network.material, vmax=n.maxVelocity||curSvc().network.maxVelocity;
+  const pipe=selectPipe(flow,mat,vmax); const v=pipe?velocityMs(flow,pipe.ID_mm):NaN;
+  return {flow, dn:pipe?pipe.DN:null, over: pipe? v>vmax : flow>0};
+}
+// branch off the riser at the top of the level; meters hang down from the branch (per reference drawing)
+function drawBranch(g,n,i,by,dir){
+  const Ld=n.data[i]; const dw=+Ld.dwellings||0;
+  const bs=levelBranch(n,i);
+  const col=bs.over?'var(--warn)':'var(--pipe)';
+  const shown=dw>0?Math.min(dw,20):0;
+  const rows= shown>6?2:1; // big banks: two-row cluster, meters stacked in pairs per column
+  const cols=Math.ceil(shown/rows);
+  const endX=n.x+dir*(26+Math.max(cols,1)*15+4);
+  g.appendChild(el('line',{x1:n.x,y1:by,x2:endX,y2:by,stroke:col,'stroke-width':2.5}));
+  const midX=(n.x+endX)/2;
+  g.appendChild(txt(midX,by-6,(bs.dn?phi(bs.dn):'OVER')+' '+curDef().label,
+    haloed({'text-anchor':'middle','font-family':'var(--mono)','font-size':11,'font-weight':700,fill:col})));
+  for(let k=0;k<shown;k++){
+    const ci=Math.floor(k/rows), ri=k%rows;
+    const mx=n.x+dir*(30+ci*15), myTop=by+9+ri*16;
+    g.appendChild(el('line',{x1:mx,y1:ri?myTop-4:by,x2:mx,y2:myTop,stroke:col,'stroke-width':1.6}));
+    g.appendChild(el('rect',{x:mx-4.5,y:myTop,width:9,height:12,rx:1.5,fill:'var(--paper)',stroke:'var(--meter)','stroke-width':1.4}));
+    g.appendChild(el('circle',{cx:mx,cy:myTop+5,r:2,fill:'var(--meter)'}));
+  }
+  const parts=[];
+  if(dw>0) parts.push(dw+' x '+curDef().label+' METERS');
+  if(+Ld.lu>0) parts.push((+Ld.lu)+' LU');
+  if(+Ld.extra>0) parts.push((+Ld.extra)+' L/s');
+  g.appendChild(txt(endX+dir*8,by+16,parts.join(' + '),
+    haloed({'text-anchor':dir>0?'start':'end','font-family':'var(--sans)','font-size':10,'letter-spacing':'.03em','font-weight':600,fill:'#44536a','stroke-width':3})));
+}
+function pathFrom(pts){ return pts.map((q,i)=>(i?'L':'M')+' '+q.x+' '+q.y).join(' '); }
+function longestSeg(pts){
+  let bi=0,bl=-1;
+  for(let i=0;i<pts.length-1;i++){ const l=Math.abs(pts[i+1].x-pts[i].x)+Math.abs(pts[i+1].y-pts[i].y); if(l>bl){bl=l;bi=i;} }
+  return bi;
+}
+
+// ---- viewport (AutoCAD-style zoom/pan) ----
+function viewW(){ return Math.max(board.clientWidth,1)/view.scale; }
+function viewH(){ return Math.max(board.clientHeight,1)/view.scale; }
+function applyView(){ board.setAttribute('viewBox',`${view.x} ${view.y} ${viewW()} ${viewH()}`); }
+function contentBounds(){
+  let x0=SHEET_LEFT, y0=SHEET_TOP-50, x1=SHEET_LEFT+1100, y1=sheetBottomY()+220;
+  const acc=(x,y)=>{ x0=Math.min(x0,x); y0=Math.min(y0,y); x1=Math.max(x1,x); y1=Math.max(y1,y); };
+  curSvc().nodes.forEach(n=>{ acc(n.x-220, n.y!=null?n.y-70:SHEET_TOP-50); acc(n.x+240, n.y!=null?n.y+70:sheetBottomY()+80); });
+  curSvc().pipes.forEach(p=>p.pts.forEach(q=>{ acc(q.x-60,q.y-60); acc(q.x+60,q.y+60); }));
+  return {x0,y0,x1,y1};
+}
+function fitView(){
+  const b=contentBounds();
+  const w=Math.max(board.clientWidth,1), h=Math.max(board.clientHeight,1);
+  view.scale=Math.min(2, Math.max(0.1, Math.min(w/(b.x1-b.x0), h/(b.y1-b.y0))));
+  view.x=b.x0-(w/view.scale-(b.x1-b.x0))/2;
+  view.y=b.y0-(h/view.scale-(b.y1-b.y0))/2;
+  applyView(); render();
+}
+
+function render(){
+  curSvc().nodes.forEach(n=>{ if(n.type==='riser') syncRiserData(n); });
+  const results=sizePipes();
+  applyView();
+  while(board.firstChild) board.removeChild(board.firstChild);
+
+  // grid (covers the visible viewport; pattern is anchored to world space so it stays put)
+  const defs=el('defs');
+  const pFine=el('pattern',{id:'gf',width:GRID,height:GRID,patternUnits:'userSpaceOnUse'});
+  pFine.appendChild(el('path',{d:`M ${GRID} 0 L 0 0 0 ${GRID}`,fill:'none',stroke:'var(--grid-fine)','stroke-width':1}));
+  const pMaj=el('pattern',{id:'gm',width:GRID*5,height:GRID*5,patternUnits:'userSpaceOnUse'});
+  pMaj.appendChild(el('rect',{width:GRID*5,height:GRID*5,fill:'url(#gf)'}));
+  pMaj.appendChild(el('path',{d:`M ${GRID*5} 0 L 0 0 0 ${GRID*5}`,fill:'none',stroke:'var(--grid-major)','stroke-width':1}));
+  const soil=el('pattern',{id:'soil',width:8,height:8,patternUnits:'userSpaceOnUse',patternTransform:'rotate(45)'});
+  soil.appendChild(el('line',{x1:0,y1:0,x2:0,y2:8,stroke:'#b7bfcb','stroke-width':1.2}));
+  defs.appendChild(pFine); defs.appendChild(pMaj); defs.appendChild(soil); board.appendChild(defs);
+  board.appendChild(el('rect',{x:view.x-200,y:view.y-200,width:viewW()+400,height:viewH()+400,fill:'url(#gm)'}));
+  const maxX=Math.max(1250, view.x+viewW()+200); // datum lines extend across the visible sheet
+  // underground: earth tint below the ground line + soil hatch strip on its underside
+  const gy=levelY(state.building.groundIdx);
+  const ugh=Math.max(0, (view.y+viewH()+200)-gy);
+  if(ugh>0){
+    board.appendChild(el('rect',{x:view.x-200,y:gy,width:viewW()+400,height:ugh,fill:'#aeb6c2','fill-opacity':.08}));
+    board.appendChild(el('rect',{x:view.x-200,y:gy,width:viewW()+400,height:12,fill:'url(#soil)',opacity:.7}));
+  }
+
+  // job title (top-left, like a sheet header)
+  const job=state.building.job||{};
+  if(job.name||job.number){
+    board.appendChild(txt(SHEET_LEFT+4,26,(job.number?job.number+' — ':'')+(job.name||''),
+      {'font-family':'var(--sans)','font-size':13,'font-weight':700,'letter-spacing':'.06em',fill:'#3d4d61'}));
+    board.appendChild(txt(SHEET_LEFT+4,42,curDef().title,
+      {'font-family':'var(--sans)','font-size':9,'letter-spacing':'.18em',fill:'#8a95a6'}));
+  }
+
+  // shared floor datum lines: ROOF, levels top→bottom (ground bold)
+  const L=levelCount();
+  const datum=(y,label,bold)=>{
+    board.appendChild(el('line',{x1:Math.min(SHEET_LEFT,view.x-200),y1:y,x2:maxX,y2:y,stroke:'var(--datum)','stroke-width':bold?1.8:1}));
+    board.appendChild(txt(Math.max(SHEET_LEFT+4,view.x+8),y-5,label,haloed({'font-family':'var(--sans)','font-size':10,'letter-spacing':'.08em',
+      fill: bold?'#6b7789':'var(--datum-ink)','font-weight':bold?700:400,'stroke-width':3})));
+  };
+  datum(SHEET_TOP,'ROOF');
+  for(let i=L-1;i>=0;i--) datum(levelY(i),state.building.levels[i], i===state.building.groundIdx);
+
+  // ---- pipes ----
+  curSvc().pipes.forEach(p=>{
+    const pts=pipePts(p); if(pts.length<2) return;
+    const r=results[p.id]||{unsized:true};
+    let color = r.unsized?'var(--unsized)': (r.over?'var(--warn)':'var(--pipe)');
+    if(ui.selKind==='pipe'&&ui.selId===p.id) color='var(--sel)';
+    if(ui.filletFirst&&ui.filletFirst.id===p.id) color='var(--sel)';
+    const d=pathFrom(pts);
+    const g=el('g',{'data-pipe-id':p.id,style:'cursor:pointer'});
+    g.appendChild(el('path',{d,fill:'none',stroke:color,'stroke-width':4,'stroke-linejoin':'miter'}));
+    g.appendChild(el('path',{d,fill:'none',stroke:'transparent','stroke-width':16})); // hit area
+    // endpoint dots where attached; open circles on free ends
+    [[pts[0],p.a],[pts[pts.length-1],p.b]].forEach(([q,att])=>{
+      if(att) g.appendChild(el('circle',{cx:q.x,cy:q.y,r:3.4,fill:color}));
+      else g.appendChild(el('circle',{cx:q.x,cy:q.y,r:4.2,fill:'var(--paper)',stroke:'var(--warn)','stroke-width':2})); // open end — not connected
+    });
+    // callout on the longest segment
+    const si=longestSeg(pts), a=pts[si], b=pts[si+1];
+    const horiz=Math.abs(b.y-a.y)<0.5;
+    const lx=(a.x+b.x)/2, ly=(a.y+b.y)/2;
+    const tx= horiz?lx:lx-10, ty= horiz?ly-9:ly-3;
+    const attrs=haloed({'font-family':'var(--mono)','font-size':13,'font-weight':700,fill:color,
+      'text-anchor': horiz?'middle':'end'});
+    if(r.dn){
+      g.appendChild(txt(tx,ty,curDef().label+' '+phi(r.dn),attrs));
+      const sub=r.flow.toFixed(2)+' L/s · '+r.vel.toFixed(2)+' m/s';
+      const sattrs=haloed({'font-family':'var(--mono)','font-size':11,'font-weight':600,fill:'#3d4d61',
+        'text-anchor': horiz?'middle':'end','stroke-width':3});
+      g.appendChild(txt(horiz?lx:lx-10, horiz?ly+17:ly+12, sub, sattrs));
+    } else if(r.unsized){ g.appendChild(txt(tx,ty,'—',attrs)); }
+    else { attrs.fill='var(--warn)'; g.appendChild(txt(tx,ty,'OVER',attrs)); }
+    board.appendChild(g);
+  });
+
+  // ---- draft pipe (while drawing with L) ----
+  if(ui.draft){
+    const dp=[...ui.draft.pts]; if(ui.draft.hover) dp.push(ui.draft.hover);
+    if(dp.length>=2) board.appendChild(el('path',{d:pathFrom(dp),fill:'none',stroke:'var(--sel)','stroke-width':3,'stroke-dasharray':'7 5','stroke-linejoin':'miter'}));
+    dp.forEach(q=>board.appendChild(el('circle',{cx:q.x,cy:q.y,r:3,fill:'var(--sel)'})));
+  }
+  if(ui.hover && (ui.mode==='draw')){ // snap indicator
+    board.appendChild(el('circle',{cx:ui.hover.x,cy:ui.hover.y,r:7,fill:'none',stroke:'var(--sel)','stroke-width':2}));
+  }
+
+  // ---- nodes ----
+  curSvc().nodes.forEach(n=>{
+    const sel = ui.selKind==='node'&&ui.selId===n.id;
+    if(n.type==='source'){
+      const g=el('g',{'data-node-id':n.id,style:'cursor:pointer'});
+      const w=120,h=44,x=n.x-w/2,y=n.y-h/2;
+      g.appendChild(el('rect',{x:x-14,y:y-14,width:w+28,height:h+28,fill:'transparent'})); // forgiving hit area
+      g.appendChild(el('rect',{x,y,width:w,height:h,rx:7,fill:'var(--source)',stroke:sel?'var(--sel)':'#0d4d3a','stroke-width':sel?3:1.5}));
+      g.appendChild(txt(n.x,n.y-3,'◆ SOURCE',{'text-anchor':'middle','font-family':'var(--sans)','font-size':9,'letter-spacing':'.12em',fill:'#bfe9d9'}));
+      g.appendChild(txt(n.x,n.y+12,n.name,{'text-anchor':'middle','font-family':'var(--sans)','font-size':12,'font-weight':600,fill:'#fff'}));
+      board.appendChild(g);
+    } else if(n.type==='plant'){
+      const g=el('g',{'data-node-id':n.id,style:'cursor:pointer'});
+      const w=132,h=46,x=n.x-w/2,y=n.y-h/2;
+      g.appendChild(el('rect',{x:x-14,y:y-14,width:w+28,height:h+28,fill:'transparent'})); // forgiving hit area
+      g.appendChild(el('rect',{x,y,width:w,height:h,rx:7,fill:'#8a4b2a',stroke:sel?'var(--sel)':'#5a2f16','stroke-width':sel?3:1.5}));
+      g.appendChild(txt(n.x,n.y-3,plantKicker(n),{'text-anchor':'middle','font-family':'var(--sans)','font-size':9,'letter-spacing':'.12em',fill:'#f3d9c4'}));
+      g.appendChild(txt(n.x,n.y+12,n.name,{'text-anchor':'middle','font-family':'var(--sans)','font-size':12,'font-weight':600,fill:'#fff'}));
+      board.appendChild(g);
+    } else if(n.type==='junction'){
+      const g=el('g',{'data-node-id':n.id,style:'cursor:pointer'});
+      g.appendChild(el('circle',{cx:n.x,cy:n.y,r:16,fill:'transparent'})); // forgiving hit area
+      g.appendChild(el('circle',{cx:n.x,cy:n.y,r:6,fill:'var(--junction)',stroke:sel?'var(--sel)':'#22303f','stroke-width':sel?3:1.5}));
+      if(n.name) g.appendChild(txt(n.x,n.y-13,n.name,{'text-anchor':'middle','font-family':'var(--sans)','font-size':10,fill:'#7d8a9c'}));
+      board.appendChild(g);
+    } else if(n.type==='riser'){
+      const g=el('g',{'data-node-id':n.id,style:'cursor:pointer'});
+      const bot=riserBotIdx(n), top=riserTopIdx(n);
+      const info=riserInfo[n.id]||{feed:null,exports:{}};
+      const feed=info.feed!=null?info.feed:bot;
+      const segs=riserSegments(n,feed,info.exports,bot,top);
+      const yBot=takeoffY(bot), yTop=takeoffY(top);
+      const dir = n.flip ? 1 : -1; // meter branches: left by default, per-riser flip
+      // narrow full-height column so pipes can connect at ANY level, wide pad over the drawn extent
+      const colTop=takeoffY(levelCount()-1)-24;
+      g.appendChild(el('rect',{x:n.x-24,y:colTop,width:48,height:sheetBottomY()-colTop+40,fill:'transparent'}));
+      g.appendChild(el('rect',{x:n.x-70,y:yTop-32,width:140,height:Math.max(yBot-yTop+64,70),fill:'transparent'}));
+      // segments between served levels — Ø callouts on the opposite side to the branches
+      const cAnchor = dir>0?'end':'start', cX = n.x - dir*10;
+      segs.forEach(s=>{
+        const y1=takeoffY(s.i), y2=takeoffY(s.i+1);
+        const col=s.over?'var(--warn)':'var(--pipe)';
+        g.appendChild(el('line',{x1:n.x,y1:y1,x2:n.x,y2:y2,stroke:sel?'var(--sel)':col,'stroke-width':4,'stroke-linecap':'round'}));
+        g.appendChild(txt(cX,(y1+y2)/2+4,s.dn?phi(s.dn):'OVER',
+          haloed({'text-anchor':cAnchor,'font-family':'var(--mono)','font-size':12,'font-weight':700,fill:col})));
+      });
+      if(bot===top){ // single-level riser: short marker so it's visible and clickable
+        g.appendChild(el('line',{x1:n.x,y1:yBot+8,x2:n.x,y2:yBot-18,stroke:sel?'var(--sel)':'var(--pipe)','stroke-width':4,'stroke-linecap':'round'}));
+      } else if(riserAttachLevels(n).indexOf(top)>=0 && riserAttachOffset(n,top)>0){
+        // a connection sits above the top branch — extend the riser line up to meet it
+        const tc=segs.length? (segs[segs.length-1].over?'var(--warn)':'var(--pipe)') : 'var(--pipe)';
+        g.appendChild(el('line',{x1:n.x,y1:yTop,x2:n.x,y2:yTop-riserAttachOffset(n,top),stroke:sel?'var(--sel)':tc,'stroke-width':4,'stroke-linecap':'round'}));
+      }
+      // takeoffs: sized branch at the top of each served level, meters hanging down
+      for(let i=bot;i<=top;i++){
+        const Ld=n.data[i], ty=takeoffY(i);
+        if(levelHasDemand(Ld)) drawBranch(g,n,i,ty,dir);
+        else if(i>bot&&i<top) g.appendChild(el('line',{x1:n.x,y1:ty,x2:n.x+dir*8,y2:ty,stroke:'#b9c2cf','stroke-width':1.2}));
+      }
+      // feed marker (where the network feeds this riser) — on the callout side, pointing at the riser
+      if(info.feed!=null){
+        const fy=takeoffY(feed)-riserAttachOffset(n,feed), sx=n.x-dir*16;
+        g.appendChild(el('path',{d:`M ${sx} ${fy-5} l ${dir*10} 5 l ${-dir*10} 5 z`,fill:'var(--pipe-2)'}));
+      }
+      g.appendChild(txt(n.x,yTop-26,n.name,haloed({'text-anchor':'middle','font-family':'var(--sans)','font-size':12,'font-weight':700,'letter-spacing':'.02em',fill:'#26374b'})));
+      board.appendChild(g);
+    }
+  });
+}
+
+// ====================== hit testing & geometry helpers ======================
+function clientToSvg(e){ const pt=board.createSVGPoint(); pt.x=e.clientX; pt.y=e.clientY;
+  return pt.matrixTransform(board.getScreenCTM().inverse()); }
+
+// what attachment (if any) is under the cursor — returns {att:{node,level?}, pt:{x,y}} or null
+function attachUnder(e, loc){
+  const nodeEl=e.target.closest('[data-node-id]');
+  if(nodeEl){
+    const n=getNode(+nodeEl.getAttribute('data-node-id')); if(!n) return null;
+    if(n.type==='riser'){
+      const li=clampLevel(n, nearestLevelForY(loc.y));
+      return {att:{node:n.id, level:li}, pt:attachPoint({node:n.id, level:li})};
+    }
+    return {att:{node:n.id}, pt:{x:n.x, y:n.y}};
+  }
+  return null;
+}
+function pipeUnder(e){ const pe=e.target.closest('[data-pipe-id]'); return pe?getPipe(+pe.getAttribute('data-pipe-id')):null; }
+
+// split a pipe at the point nearest loc → returns the new tee node
+function splitPipeAt(p, loc){
+  const pts=pipePts(p);
+  let bi=0,bq=null,bd=Infinity;
+  for(let i=0;i<pts.length-1;i++){
+    const a=pts[i],b=pts[i+1];
+    let q;
+    if(Math.abs(a.y-b.y)<0.5){ // horizontal
+      const x=Math.max(Math.min(a.x,b.x),Math.min(Math.max(a.x,b.x),snap(loc.x)));
+      q={x, y:a.y};
+    } else {
+      const y=Math.max(Math.min(a.y,b.y),Math.min(Math.max(a.y,b.y),snap(loc.y)));
+      q={x:a.x, y};
+    }
+    const d=Math.hypot(q.x-loc.x,q.y-loc.y);
+    if(d<bd){ bd=d; bi=i; bq=q; }
+  }
+  const tee={id:nid(),type:'junction',x:bq.x,y:bq.y,name:''};
+  curSvc().nodes.push(tee);
+  const pts1=pts.slice(0,bi+1); pts1.push({...bq});
+  const pts2=[{...bq},...pts.slice(bi+1)];
+  const p1={id:nid(),pts:dedupe(pts1),a:p.a,b:{node:tee.id}};
+  const p2={id:nid(),pts:dedupe(pts2),a:{node:tee.id},b:p.b};
+  curSvc().pipes=curSvc().pipes.filter(x=>x.id!==p.id);
+  if(p1.pts.length>=2) curSvc().pipes.push(p1);
+  if(p2.pts.length>=2) curSvc().pipes.push(p2);
+  return tee;
+}
+function dedupe(pts){
+  const out=[pts[0]];
+  for(let i=1;i<pts.length;i++){ const l=out[out.length-1];
+    if(Math.abs(pts[i].x-l.x)>0.5||Math.abs(pts[i].y-l.y)>0.5) out.push(pts[i]); }
+  return out;
+}
+// ortho-snapped continuation from the draft's last point toward loc
+function orthoNext(lp, loc){
+  const dx=loc.x-lp.x, dy=loc.y-lp.y;
+  return Math.abs(dx)>=Math.abs(dy) ? {x:snap(loc.x),y:lp.y} : {x:lp.x,y:snap(loc.y)};
+}
+
+// ====================== interaction ======================
+board.addEventListener('mousedown',e=>{
+  if(e.button===1||e.button===2){ ui.pan={sx:e.clientX,sy:e.clientY,vx:view.x,vy:view.y}; e.preventDefault(); return; } // middle- or right-drag pan
+  if(e.button!==0) return;
+  const loc=clientToSvg(e);
+  if(ui.mode==='draw'){ drawClick(e,loc); return; }
+  if(ui.mode==='fillet'){ filletClick(e); return; }
+  const nodeEl=e.target.closest('[data-node-id]');
+  const pipeEl=e.target.closest('[data-pipe-id]');
+  if(nodeEl){
+    const id=+nodeEl.getAttribute('data-node-id');
+    const n=getNode(id);
+    ui.drag={id,ox:loc.x-n.x,oy:loc.y-(n.y!=null?n.y:0),moved:false,downx:loc.x,downy:loc.y};
+  } else if(pipeEl){
+    selectPipe_(+pipeEl.getAttribute('data-pipe-id'));
+  } else {
+    selectNone();
+  }
+});
+window.addEventListener('mousemove',e=>{
+  if(ui.pan){
+    view.x=ui.pan.vx-(e.clientX-ui.pan.sx)/view.scale;
+    view.y=ui.pan.vy-(e.clientY-ui.pan.sy)/view.scale;
+    render(); return;
+  }
+  if(ui.mode==='draw'){
+    const loc=clientToSvg(e);
+    const hit=attachUnder(e,loc);
+    ui.hover=hit?hit.pt:null;
+    if(ui.draft){
+      const lp=ui.draft.pts[ui.draft.pts.length-1];
+      ui.draft.hover = hit? null : orthoNext(lp,loc); // over an attach point the snap ring shows instead
+    }
+    render(); return;
+  }
+  if(!ui.drag) return;
+  const loc=clientToSvg(e);
+  if(Math.abs(loc.x-ui.drag.downx)>3||Math.abs(loc.y-ui.drag.downy)>3) ui.drag.moved=true;
+  const n=getNode(ui.drag.id); if(!n) return;
+  n.x=snap(loc.x-ui.drag.ox);
+  if(n.type!=='riser') n.y=snap(loc.y-ui.drag.oy); // risers ride the floor lines: horizontal move only
+  render();
+});
+window.addEventListener('mouseup',e=>{
+  if(ui.pan && (e.button===1||e.button===2)){ ui.pan=null; return; }
+  if(ui.drag){ if(!ui.drag.moved) selectNode_(ui.drag.id); ui.drag=null; render(); }
+});
+// wheel = zoom centred on the cursor (AutoCAD style)
+document.getElementById('canvas-wrap').addEventListener('wheel',e=>{
+  e.preventDefault();
+  const r=board.getBoundingClientRect();
+  const wx=view.x+(e.clientX-r.left)/view.scale, wy=view.y+(e.clientY-r.top)/view.scale;
+  const f= e.deltaY<0 ? 1.15 : 1/1.15;
+  view.scale=Math.min(6, Math.max(0.08, view.scale*f));
+  view.x=wx-(e.clientX-r.left)/view.scale;
+  view.y=wy-(e.clientY-r.top)/view.scale;
+  render();
+},{passive:false});
+document.getElementById('canvas-wrap').addEventListener('auxclick',e=>e.preventDefault());
+document.getElementById('canvas-wrap').addEventListener('contextmenu',e=>e.preventDefault()); // right button pans instead
+window.addEventListener('resize',()=>render());
+board.addEventListener('dblclick',e=>{ if(ui.mode==='draw'&&ui.draft) finishDraft(null); });
+window.addEventListener('keydown',e=>{
+  if(document.activeElement.tagName==='INPUT'||document.activeElement.tagName==='SELECT'||document.activeElement.tagName==='TEXTAREA') return;
+  if(!document.getElementById('setup').classList.contains('hidden')) return;
+  if(!document.getElementById('riserdlg').classList.contains('hidden')) return;
+  const k=e.key.toLowerCase();
+  if(k==='l'){ setMode('draw'); }
+  else if(k==='f'){ setMode('fillet'); }
+  else if(k==='z'){ fitView(); }
+  else if(e.key==='Escape'){
+    if(ui.draft){ ui.draft=null; updateHint(); render(); }
+    else if(ui.mode!=='select'){ setMode('select'); }
+    else selectNone();
+  }
+  else if(e.key==='Enter'){ if(ui.mode==='draw'&&ui.draft) finishDraft(null); }
+  else if(e.key==='Delete'||e.key==='Backspace'){ if(ui.selId!=null) deleteSelected(); }
+});
+
+// L-shaped route from lp to pt with the final approach horizontal (suits riser takeoffs / node sides)
+function routeTo(lp, pt){
+  if(Math.abs(lp.x-pt.x)<0.5||Math.abs(lp.y-pt.y)<0.5) return [pt];
+  return [{x:lp.x,y:pt.y}, pt];
+}
+function drawClick(e, loc){
+  const hit=attachUnder(e,loc);
+  const pl=(!hit)?pipeUnder(e):null;
+  if(!ui.draft){
+    if(hit){ ui.draft={pts:[hit.pt],a:hit.att,hover:null}; }
+    else if(pl){ const tee=splitPipeAt(pl,loc); ui.draft={pts:[{x:tee.x,y:tee.y}],a:{node:tee.id},hover:null}; }
+    else { ui.draft={pts:[{x:snap(loc.x),y:snap(loc.y)}],a:null,hover:null}; }
+  } else {
+    const lp=ui.draft.pts[ui.draft.pts.length-1];
+    if(hit){
+      if(ui.draft.a && hit.att.node===ui.draft.a.node && ui.draft.pts.length===1){ return; } // don't zero-length back onto start
+      routeTo(lp,hit.pt).forEach(q=>ui.draft.pts.push(q));
+      finishDraft(hit.att); return;
+    }
+    if(pl){
+      const tee=splitPipeAt(pl,loc);
+      routeTo(lp,{x:tee.x,y:tee.y}).forEach(q=>ui.draft.pts.push(q));
+      finishDraft({node:tee.id}); return;
+    }
+    ui.draft.pts.push(orthoNext(lp,loc));
+  }
+  updateHint(); render();
+}
+function finishDraft(endAtt){
+  const d=ui.draft; ui.draft=null;
+  if(!d) return;
+  const pts=dedupe(d.pts);
+  if(pts.length>=2) curSvc().pipes.push({id:nid(),pts,a:d.a,b:endAtt});
+  updateHint(); render();
+}
+
+// ---- fillet (AutoCAD radius-0 style): click two runs anywhere along them; the clicked
+// sides trim/extend to a square corner and merge into one pipe, regardless of attachments ----
+function filletClick(e){
+  const loc=clientToSvg(e);
+  const p=pipeUnder(e);
+  if(!p){ ui.filletFirst=null; updateHint(); render(); return; }
+  if(ui.filletFirst==null || ui.filletFirst.id===p.id){ ui.filletFirst={id:p.id,loc}; updateHint(); render(); return; }
+  const ok=filletPipes(ui.filletFirst,{id:p.id,loc});
+  ui.filletFirst=null; updateHint(); render();
+  if(!ok) alert('Could not fillet those two — the clicked segments must be perpendicular (or collinear ends to bridge).');
+}
+// nearest segment of a polyline to a point
+function nearestSegInfo(pts,loc){
+  let best=null;
+  for(let i=0;i<pts.length-1;i++){
+    const a=pts[i],b=pts[i+1];
+    const horiz=Math.abs(a.y-b.y)<0.5;
+    let q;
+    if(horiz){ const x=Math.max(Math.min(a.x,b.x),Math.min(Math.max(a.x,b.x),loc.x)); q={x,y:a.y}; }
+    else { const y=Math.max(Math.min(a.y,b.y),Math.min(Math.max(a.y,b.y),loc.y)); q={x:a.x,y}; }
+    const d=Math.hypot(q.x-loc.x,q.y-loc.y);
+    if(!best||d<best.d) best={i,horiz,d,q};
+  }
+  return best;
+}
+// cut the pipe's clicked segment at the corner, keep the clicked side; result ends at corner.
+// att = the attachment surviving at the kept far end (the trimmed side's attachment is dropped).
+function trimSide(p, pts, seg, corner, clickLoc){
+  const ax=seg.horiz?'x':'y';
+  const cs=Math.sign(clickLoc[ax]-corner[ax]);
+  const s0=Math.sign(pts[seg.i][ax]-corner[ax]), s1=Math.sign(pts[seg.i+1][ax]-corner[ax]);
+  let keepStart;
+  if(s0===cs && s1===cs) // corner lies beyond the segment: extend, keep the longer side
+    keepStart = Math.hypot(pts[0].x-corner.x,pts[0].y-corner.y) >= Math.hypot(pts[pts.length-1].x-corner.x,pts[pts.length-1].y-corner.y);
+  else if(s0===cs) keepStart=true;
+  else if(s1===cs) keepStart=false;
+  else keepStart=true;
+  if(keepStart) return {pts:dedupe([...pts.slice(0,seg.i+1).map(q=>({...q})),{...corner}]), att:p.a};
+  const kept=[...pts.slice(seg.i+1).map(q=>({...q}))].reverse(); kept.push({...corner});
+  return {pts:dedupe(kept), att:p.b};
+}
+function filletPipes(f1,f2){
+  const A=getPipe(f1.id), B=getPipe(f2.id); if(!A||!B) return false;
+  const pa=pipePts(A), pb=pipePts(B);
+  const sa=nearestSegInfo(pa,f1.loc), sb=nearestSegInfo(pb,f2.loc);
+  if(!sa||!sb) return false;
+  let corner=null;
+  if(sa.horiz!==sb.horiz){
+    corner = sa.horiz ? {x:pb[sb.i].x, y:pa[sa.i].y} : {x:pa[sa.i].x, y:pb[sb.i].y};
+  } else if(sa.horiz && Math.abs(pa[sa.i].y-pb[sb.i].y)<0.5){
+    corner={x:(sa.q.x+sb.q.x)/2, y:pa[sa.i].y};   // collinear horizontals: bridge the gap
+  } else if(!sa.horiz && Math.abs(pa[sa.i].x-pb[sb.i].x)<0.5){
+    corner={x:pa[sa.i].x, y:(sa.q.y+sb.q.y)/2};   // collinear verticals
+  } else return false;
+  const ka=trimSide(A,pa,sa,corner,f1.loc);            // ends at corner
+  const kbT=trimSide(B,pb,sb,corner,f2.loc);
+  const kbPts=[...kbT.pts].reverse();                  // starts at corner
+  const merged={id:nid(), pts:dedupe([...ka.pts, ...kbPts.slice(1)]), a:ka.att, b:kbT.att};
+  if(merged.pts.length<2) return false;
+  curSvc().pipes=curSvc().pipes.filter(x=>x.id!==A.id&&x.id!==B.id);
+  curSvc().pipes.push(merged);
+  selectNone();
+  return true;
+}
+
+// ====================== selection + deletion ======================
+function selectNode_(id){ ui.selKind='node'; ui.selId=id; renderPanel(); render(); }
+function selectPipe_(id){ ui.selKind='pipe'; ui.selId=id; renderPanel(); render(); }
+function selectNone(){ ui.selKind=null; ui.selId=null; renderPanel(); render(); }
+function deleteSelected(){
+  if(ui.selKind==='node'){
+    curSvc().pipes=curSvc().pipes.filter(p=>!(p.a&&p.a.node===ui.selId)&&!(p.b&&p.b.node===ui.selId));
+    curSvc().nodes=curSvc().nodes.filter(n=>n.id!==ui.selId);
+  }
+  else if(ui.selKind==='pipe'){ curSvc().pipes=curSvc().pipes.filter(p=>p.id!==ui.selId); }
+  selectNone();
+}
+
+// ====================== side panel ======================
+function renderPanel(){
+  const kicker=document.getElementById('p-kicker'), title=document.getElementById('p-title'), body=document.getElementById('p-body');
+  body.innerHTML='';
+  if(ui.selKind==='node'){
+    const n=getNode(ui.selId); if(!n){ selectNone(); return; }
+    if(n.type==='riser'){ kicker.textContent='Riser'; title.textContent=n.name; renderRiserPanel(n,body); }
+    else if(n.type==='plant'){ kicker.textContent='HW Plant'; title.textContent=n.name; renderPlantPanel(n,body); }
+    else if(n.type==='source'){ kicker.textContent='Source'; title.textContent=n.name; renderNamePanel(n,body,'Supply name'); }
+    else { kicker.textContent='Tee / Junction'; title.textContent=n.name||'Tee'; renderNamePanel(n,body,'Label'); }
+  } else if(ui.selKind==='pipe'){
+    kicker.textContent='Main segment'; title.textContent='Pipe';
+    const r=sizePipes()[ui.selId]||{};
+    body.innerHTML=`<div class="readout">
+      <div><span class="k">Flow</span><span class="v">${r.flow!=null?r.flow.toFixed(3)+' L/s':'—'}</span></div>
+      <div><span class="k">Size</span><span class="v ${r.over?'warn':''}">${r.dn?phi(r.dn):(r.unsized?'not sized':'OVER CAPACITY')}</span></div>
+      ${(()=>{ if(!r.unsized) return '';
+        const p=getPipe(ui.selId);
+        if(p&&(!p.a||!p.b)) return '<div><span class="k">Why</span><span class="v warn">open end ○ — not attached</span></div>';
+        return '<div><span class="k">Why</span><span class="v warn">no path from source (loop or gap)</span></div>'; })()}
+      <div><span class="k">Velocity</span><span class="v ${r.over?'warn':''}">${r.vel!=null&&!isNaN(r.vel)?r.vel.toFixed(2)+' m/s':'—'}</span></div>
+      <div><span class="k">Material</span><span class="v">${curSvc().network.material==='copper_type_b'?'Copper Type B':'Stainless'}</span></div>
+    </div>
+    ${(()=>{ if(r.flow==null||r.flow<=0) return '';
+      const table=[...pipeTable(curSvc().network.material)].sort((a,b)=>a.ID_mm-b.ID_mm);
+      const vmax=curSvc().network.maxVelocity;
+      let idx=table.findIndex(pp=>maxFlowForVel(pp.ID_mm,vmax)>=r.flow);
+      if(idx<0) idx=table.length; // nothing fits — over capacity
+      const row=(i,tag)=>{ if(i<0||i>=table.length) return '';
+        const v=velocityMs(r.flow,table[i].ID_mm);
+        const over=v>vmax+1e-9;
+        return `<div><span class="k">${phi(table[i].DN)} ${tag}</span><span class="v ${over?'warn':''}">${v.toFixed(2)} m/s${over?' ▲ over':''}</span></div>`; };
+      return `<div class="sect">Size options at ${r.flow.toFixed(2)} L/s</div>
+        <div class="readout">
+          ${row(idx-1,'— one size down')}
+          ${row(idx,'— recommended')||'<div><span class="k">No size fits</span><span class="v warn">over capacity</span></div>'}
+          ${row(idx+1,'— one size up')}
+        </div>`; })()}
+    <p class="empty" style="margin-top:12px">Mains carry the demand of everything downstream of them. A pipe with a free (open) end is not sized — finish it onto a node.</p>
+    <button class="tool" style="margin-top:8px;width:100%;justify-content:center" onclick="deleteSelected()">🗑 Delete this pipe</button>`;
+    // riser attachments: editable attach level + 📌 pin (a pinned feed stays put when the riser's start level changes)
+    const selP=getPipe(ui.selId);
+    if(selP) ['a','b'].forEach(endKey=>{
+      const att=selP[endKey]; if(!att) return;
+      const nd=getNode(att.node); if(!nd||nd.type!=='riser') return;
+      const sec=document.createElement('div');
+      sec.innerHTML=`<div class="sect">End ${endKey==='a'?'A':'B'} — ${escapeHtml(nd.name)}</div>
+        <div class="row"><label>Attached at level
+          <select class="field">${state.building.levels.map((nm,i)=>`<option value="${i}" ${i===clampLevel(nd,att.level)?'selected':''}>${escapeHtml(nm)}</option>`).join('')}</select></label></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink-dim);margin-bottom:10px">
+          <input type="checkbox" ${att.pin?'checked':''} style="margin:0"> 📌 Pin this level (don't follow the riser's start level)</label>`;
+      sec.querySelector('select').addEventListener('change',e=>{ att.level=parseInt(e.target.value)||0; render(); });
+      sec.querySelector('input[type=checkbox]').addEventListener('change',e=>{ att.pin=e.target.checked||undefined; });
+      body.insertBefore(sec, body.querySelector('button.tool'));
+    });
+  } else {
+    kicker.textContent='Building'; title.textContent=(state.building.job&&state.building.job.name)||'Levels & network';
+    renderBuildingPanel(body);
+  }
+}
+
+function renderBuildingPanel(body){
+  const wrap=document.createElement('div');
+  wrap.innerHTML=`
+    <div class="sect">Building levels (shared by all risers)</div>
+    <div class="levels" id="blevels"></div>
+    <button class="tool addlvl" id="addblvl">+ Add level on top</button>
+    <div class="sect">Network</div>
+    <div class="readout">
+      <div><span class="k">Risers</span><span class="v">${curSvc().nodes.filter(n=>n.type==='riser').length}</span></div>
+      <div><span class="k">Sources</span><span class="v">${curSvc().nodes.filter(n=>n.type==='source').length}</span></div>
+      <div><span class="k">Plants</span><span class="v">${curSvc().nodes.filter(n=>n.type==='plant').length}</span></div>
+      <div><span class="k">Pipes</span><span class="v">${curSvc().pipes.length}</span></div>
+    </div>
+    <div class="sect">Commands</div>
+    <ul class="empty">
+      <li><kbd>L</kbd> draw pipe — click a start (source, riser at any level, tee, or an existing pipe to T off), click waypoints, click the end. <kbd>Enter</kbd>/double-click ends open, <kbd>Esc</kbd> cancels.</li>
+      <li><kbd>F</kbd> fillet — click two pipe runs anywhere along them; the clicked sides trim/extend to a square corner and merge into one run (crossing runs get cut at the corner).</li>
+      <li><kbd>Esc</kbd> back to select · <kbd>Del</kbd> delete selection.</li>
+      <li>Wheel = zoom · middle- or right-drag = pan · <kbd>Z</kbd> zoom extents.</li>
+      <li>Risers slide along the floor lines; pipes stay attached.</li>
+    </ul>
+    <p class="empty">Sizing uses the GFB residential method: dwelling demand curve + loading-unit (PSFR) curve, smallest pipe under the velocity limit. Riser segments size away from the feed point (top-fed, bottom-fed or mid-fed), including flow exported to other risers.</p>`;
+  body.appendChild(wrap);
+  const host=wrap.querySelector('#blevels');
+  const head=document.createElement('div'); head.className='lvl-head b';
+  head.innerHTML='<div>Level (top first)</div><div>＋</div><div>×</div>';
+  host.appendChild(head);
+  for(let i=levelCount()-1;i>=0;i--){
+    const row=document.createElement('div'); row.className='lvl-row b'+(i===state.building.groundIdx?' ground':'');
+    row.innerHTML=`<input value="${escapeHtml(state.building.levels[i])}">
+      <button class="xbtn add" title="Insert level above">＋</button>
+      <button class="xbtn" title="Remove level">×</button>`;
+    row.querySelector('input').addEventListener('input',e=>{ state.building.levels[i]=e.target.value; render(); });
+    row.querySelector('.add').addEventListener('click',()=>{ insertLevel(i+1,'MEZZANINE'); renderPanel(); render(); });
+    row.querySelector('.xbtn:not(.add)').addEventListener('click',()=>{
+      if(levelCount()<=1) return;
+      let used=false; eachRiserAll(r=>{ if(r.data[i]&&levelHasDemand(r.data[i])) used=true; });
+      if(used && !confirm(`"${state.building.levels[i]}" has demand on at least one riser. Remove it anyway?`)) return;
+      removeLevel(i); renderPanel(); render();
+    });
+    host.appendChild(row);
+  }
+  wrap.querySelector('#addblvl').addEventListener('click',()=>{ insertLevel(levelCount(),'LEVEL '+(levelCount()-state.building.groundIdx)); renderPanel(); render(); });
+}
+function insertLevel(idx,name){
+  state.building.levels.splice(idx,0,name);
+  if(idx<=state.building.groundIdx) state.building.groundIdx++;
+  eachRiserAll(r=>{
+    if(!Array.isArray(r.data)) r.data=[];
+    r.data.splice(Math.min(idx,r.data.length),0,blankLevel());
+    if(r.start!=null && idx<=r.start) r.start++;
+  });
+  remapAttachLevels(li=> li>=idx? li+1 : li);
+}
+function removeLevel(idx){
+  state.building.levels.splice(idx,1);
+  if(idx<state.building.groundIdx) state.building.groundIdx--;
+  if(state.building.groundIdx>=levelCount()) state.building.groundIdx=levelCount()-1;
+  eachRiserAll(r=>{
+    if(r.data && r.data.length>idx) r.data.splice(idx,1);
+    if(r.start!=null){ if(idx<r.start) r.start--; if(r.start>=levelCount()) r.start=levelCount()-1; }
+  });
+  remapAttachLevels(li=> li>idx? li-1 : (li===idx? Math.max(0,idx-1) : li));
+}
+function remapAttachLevels(fn){
+  allServiceSlices().forEach(s=>s.pipes.forEach(p=>{ [p.a,p.b].forEach(att=>{ if(att&&att.level!=null) att.level=fn(att.level); }); }));
+}
+
+function renderPlantPanel(n,body){
+  if(!n.plantType) n.plantType='gas_central';
+  const wrap=document.createElement('div');
+  wrap.innerHTML=`<div class="row"><label>Plant name<input class="field" id="pname" value="${escapeHtml(n.name||'')}"></label></div>
+    <div class="row"><label>Configuration
+      <select class="field" id="ptype">
+        <option value="gas_central">Gas · Central</option>
+        <option value="gas_individual">Gas · Individual</option>
+        <option value="elec_central">Electric · Central</option>
+        <option value="elec_individual">Electric · Individual</option>
+      </select></label></div>
+    <div class="row"><label>Gas load (MJ/hr)<input class="field" id="pgas" type="number" min="0" value="${n.gasLoad||0}"></label></div>
+    <p class="empty" style="margin-top:6px">The plant is the hot-water feed at the roof. Draw the flow main (<kbd>L</kbd>) from here down into each riser — connect at the top level so it feeds from the roof. Gas load is stored for the future gas schematic.</p>
+    <button class="tool" style="margin-top:8px;width:100%;justify-content:center" id="delp">🗑 Delete plant</button>`;
+  body.appendChild(wrap);
+  wrap.querySelector('#pname').addEventListener('input',e=>{ n.name=e.target.value; document.getElementById('p-title').textContent=n.name; render(); });
+  const ps=wrap.querySelector('#ptype'); ps.value=n.plantType; ps.addEventListener('change',e=>{ n.plantType=e.target.value; render(); });
+  wrap.querySelector('#pgas').addEventListener('input',e=>{ n.gasLoad=parseFloat(e.target.value)||0; });
+  wrap.querySelector('#delp').addEventListener('click',deleteSelected);
+}
+function renderNamePanel(n,body,label){
+  const wrap=document.createElement('div');
+  wrap.innerHTML=`<div class="row"><label>${label}<input class="field" id="nm" value="${escapeHtml(n.name||'')}"></label></div>
+    <button class="tool" style="width:100%;justify-content:center" id="del">🗑 Delete</button>`;
+  body.appendChild(wrap);
+  wrap.querySelector('#nm').addEventListener('input',ev=>{ n.name=ev.target.value; document.getElementById('p-title').textContent=n.name; render(); });
+  wrap.querySelector('#del').addEventListener('click',deleteSelected);
+}
+
+function renderRiserPanel(n,body){
+  syncRiserData(n);
+  if(!n.material) n.material='';
+  const wrap=document.createElement('div');
+  const base=riserBaseFlow(n);
+  const info=riserInfo[n.id]||{feed:null,exports:{}};
+  const feedName= info.feed!=null? state.building.levels[info.feed] : 'not connected';
+  wrap.innerHTML=`
+    <div class="row">
+      <label>Name<input class="field" id="rname" value="${escapeHtml(n.name)}"></label>
+    </div>
+    <div class="row">
+      <label>Starts at
+        <select class="field" id="rstart">${state.building.levels.map((nm,i)=>`<option value="${i}" ${i===riserStartIdx(n)?'selected':''}>${escapeHtml(nm)}</option>`).join('')}</select>
+      </label>
+      <label>Material
+        <select class="field" id="rmat">
+          <option value="">Use main default</option>
+          <option value="copper_type_b">Copper Type B</option>
+          <option value="stainless_steel">Stainless Steel</option>
+        </select>
+      </label>
+      <label>Max vel (m/s)<input class="field" id="rvel" type="number" step="0.1" placeholder="default" value="${n.maxVelocity||''}"></label>
+    </div>
+    <div class="row">
+      <label>Meter branch side
+        <select class="field" id="rflip">
+          <option value="left">Left</option>
+          <option value="right">Right</option>
+        </select>
+      </label>
+    </div>
+    <div class="sect">Demand per level (top first)</div>
+    <div class="levels" id="levels"></div>
+    <div class="readout" style="margin-top:12px">
+      <div><span class="k">Total riser flow</span><span class="v">${base.toFixed(3)} L/s</span></div>
+      <div><span class="k">Fed at</span><span class="v">${escapeHtml(feedName)}</span></div>
+    </div>
+    <p class="empty" style="margin-top:8px">Segments size away from the feed point. The riser spans from its lowest to highest level with demand — give a level dwellings/LU to extend it.</p>
+    <button class="tool" style="margin-top:10px;width:100%;justify-content:center" id="delr">🗑 Delete riser</button>`;
+  body.appendChild(wrap);
+  wrap.querySelector('#rname').addEventListener('input',e=>{ n.name=e.target.value; document.getElementById('p-title').textContent=n.name; render(); });
+  wrap.querySelector('#rstart').addEventListener('change',e=>{
+    const oldS=riserStartIdx(n);
+    n.start=parseInt(e.target.value)||0;
+    const newS=riserStartIdx(n);
+    // base feeds (attached at or below the old start) follow the base to its new level;
+    // deliberate mid-riser connections above the old start — and 📌 pinned ones — stay where they are
+    curSvc().pipes.forEach(p=>{ [p.a,p.b].forEach(att=>{
+      if(att&&att.node===n.id&&att.level!=null&&att.level<=oldS&&!att.pin) att.level=newS; }); });
+    renderPanel(); render();
+  });
+  const fsel=wrap.querySelector('#rflip'); fsel.value=n.flip?'right':'left';
+  fsel.addEventListener('change',e=>{ n.flip = e.target.value==='right'; render(); });
+  const matSel2=wrap.querySelector('#rmat'); matSel2.value=n.material||''; matSel2.addEventListener('change',e=>{ n.material=e.target.value; renderPanel(); render(); });
+  wrap.querySelector('#rvel').addEventListener('input',e=>{ n.maxVelocity=e.target.value?parseFloat(e.target.value):null; renderPanel(); render(); });
+  wrap.querySelector('#delr').addEventListener('click',deleteSelected);
+  renderLevelsEditor(n, wrap.querySelector('#levels'));
+}
+
+function levelBadge(n,i){
+  const info=riserInfo[n.id]||{feed:null,exports:{}};
+  const bot=riserBotIdx(n), top=riserTopIdx(n);
+  const feed=info.feed!=null?clampLevel(n,info.feed):bot;
+  if(i<bot||i>top) return {text: i<riserStartIdx(n)?'below riser start':'—', cls:''};
+  if(i===feed) return {text:'FEED LEVEL · '+riserBaseFlow(n).toFixed(2)+' L/s total',cls:' feed'};
+  const segs=riserSegments(n,feed,info.exports,bot,top);
+  const s= i>feed ? segs.find(x=>x.i===i-1) : segs.find(x=>x.i===i);
+  if(!s) return {text:'—',cls:''};
+  return {text:`${s.dn?phi(s.dn):'OVER'} · ${s.flow.toFixed(2)} L/s · ${isNaN(s.vel)?'–':s.vel.toFixed(2)+' m/s'}`, cls: s.over?' warn':''};
+}
+function renderLevelsEditor(n,host){
+  host.innerHTML='';
+  const head=document.createElement('div'); head.className='lvl-head';
+  head.innerHTML='<div>Level</div><div>Dwell.</div><div>LU</div>';
+  host.appendChild(head);
+  const bot=riserStartIdx(n);
+  for(let i=levelCount()-1;i>=0;i--){
+    const L=n.data[i];
+    const below = i<bot;
+    const row=document.createElement('div'); row.className='lvl-row'+(i===state.building.groundIdx?' ground':'');
+    if(below) row.style.opacity='.38';
+    row.innerHTML=`<div class="lname">${escapeHtml(state.building.levels[i])}</div>
+      <input type="number" min="0" value="${L.dwellings||0}" data-f="dwellings" ${below?'disabled':''}>
+      <input type="number" min="0" value="${L.lu||0}" data-f="lu" ${below?'disabled':''}>`;
+    row.querySelectorAll('input').forEach(inp=>{
+      inp.addEventListener('input',e=>{ const f=inp.getAttribute('data-f');
+        L[f]=parseFloat(e.target.value)||0;
+        render(); refreshLevelDNs(n,host); // keep focus: no full panel rebuild
+      });
+    });
+    const dn=document.createElement('span');
+    const b=levelBadge(n,i);
+    dn.className='dn'+b.cls; dn.textContent=`${state.building.levels[i]}: ${b.text}`;
+    host.appendChild(row); host.appendChild(dn);
+  }
+}
+function refreshLevelDNs(n,host){
+  const badges=host.querySelectorAll('.dn'); let k=0;
+  for(let i=levelCount()-1;i>=0;i--){ const el2=badges[k++]; if(!el2) continue;
+    const b=levelBadge(n,i);
+    el2.className='dn'+b.cls; el2.textContent=`${state.building.levels[i]}: ${b.text}`; }
+}
+function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// ====================== toolbar ======================
+document.querySelectorAll('[data-add]').forEach(btn=>btn.addEventListener('click',()=>{
+  const type=btn.getAttribute('data-add');
+  if(type==='riser'){ openRiserDlg(); return; }
+  if(type==='plant'){
+    const node={id:nid(),type:'plant',x:snap(view.x+viewW()*0.4),y:snap(SHEET_TOP-14),name:'HW PLANT',plantType:'gas_central',gasLoad:0};
+    curSvc().nodes.push(node); selectNode_(node.id); return;
+  }
+  const cx=snap(view.x+viewW()*0.4), cy=snap(Math.max(view.y+viewH()*0.5, levelY(state.building.groundIdx)+56));
+  const node = type==='source'
+    ? {id:nid(),type:'source',x:cx,y:cy,name:'SOURCE'}
+    : {id:nid(),type:'junction',x:cx,y:cy,name:''};
+  curSvc().nodes.push(node); selectNode_(node.id);
+}));
+
+// ---- new riser dialog ----
+function openRiserDlg(){
+  document.getElementById('r-name').value='CW RISER '+(allRisers().length+1);
+  const opts=state.building.levels.map((nm,i)=>`<option value="${i}">${escapeHtml(nm)}</option>`).join('');
+  const s=document.getElementById('r-start'); s.innerHTML=opts; s.value=String(state.building.groundIdx);
+  const t=document.getElementById('r-top'); t.innerHTML=opts; t.value=String(levelCount()-1);
+  document.getElementById('riserdlg').classList.remove('hidden');
+}
+document.getElementById('r-cancel').addEventListener('click',()=>document.getElementById('riserdlg').classList.add('hidden'));
+document.getElementById('r-add').addEventListener('click',()=>{
+  let s=parseInt(document.getElementById('r-start').value)||0, t=parseInt(document.getElementById('r-top').value)||0;
+  if(t<s){ const tmp=s; s=t; t=tmp; }
+  const dw=parseFloat(document.getElementById('r-dw').value)||0;
+  const xs=allRisers().map(r=>r.x);
+  const node={id:nid(),type:'riser',x:snap(xs.length?Math.max(...xs)+340:420),
+    name:document.getElementById('r-name').value||('CW RISER '+(allRisers().length+1)),
+    start:s, data:state.building.levels.map(()=>blankLevel())};
+  for(let i=s;i<=t;i++) node.data[i].dwellings=dw;
+  curSvc().nodes.push(node);
+  if(document.getElementById('r-conn').checked) autoConnectRiser(node);
+  document.getElementById('riserdlg').classList.add('hidden');
+  selectNode_(node.id);
+});
+// run a main from the nearest source / plant / riser into this riser's start level
+function autoConnectRiser(n){
+  const cands=curSvc().nodes.filter(x=>x.id!==n.id&&(x.type==='source'||x.type==='plant'||x.type==='riser'));
+  if(!cands.length) return;
+  const ref=attachPoint({node:n.id,level:riserStartIdx(n)});
+  let best=null,bd=Infinity;
+  cands.forEach(c=>{
+    const att= c.type==='riser'? {node:c.id,level:riserStartIdx(c)} : {node:c.id};
+    const q=attachPoint(att); const d=Math.hypot(q.x-ref.x,q.y-ref.y);
+    if(d<bd){ bd=d; best={att,q,type:c.type}; }
+  });
+  const endAtt={node:n.id, level: best.type==='plant'? riserTopIdx(n) : riserStartIdx(n)}; // a roof plant drops into the riser top
+  const bp=attachPoint(endAtt);
+  let pts;
+  if(best.att.level!=null || best.type==='plant'){
+    // riser to riser: straight across in the ceiling of the connection level (the attach point
+    // already sits clear of the meter branch). From a plant: across at the higher of the two.
+    const ry=Math.min(best.q.y,bp.y);
+    pts=[{...best.q},{x:best.q.x,y:ry},{x:bp.x,y:ry},{...bp}];
+  } else {
+    pts= Math.abs(best.q.y-bp.y)<0.5 ? [{...best.q},{...bp}] : [{...best.q},{x:bp.x,y:best.q.y},{...bp}];
+  }
+  curSvc().pipes.push({id:nid(),pts:dedupe(pts),a:best.att,b:endAtt});
+}
+// build the hot-water sheet from the cold-water risers: a roof plant + mirrored HW risers,
+// each fed from the plant at its top (roof) level so riser segments size downward from the plant.
+function setupHotWaterFromCW(auto){
+  if(state.activeService!=='hw'){ state.activeService='hw'; matSel.value=curSvc().network.material; velInp.value=curSvc().network.maxVelocity; syncServiceUI(); }
+  const hw=curSvc();
+  if(!auto && hw.nodes.length && !confirm('Rebuild the hot-water sheet from the cold-water risers? This replaces the current hot-water drawing.')) return;
+  hw.nodes=[]; hw.pipes=[];
+  const plant={id:nid(),type:'plant',x:snap(160),y:snap(SHEET_TOP-14),name:'HW PLANT',plantType:'gas_central',gasLoad:0};
+  hw.nodes.push(plant);
+  const cwRisers=state.services.cw.nodes.filter(n=>n.type==='riser').slice().sort((a,b)=>a.x-b.x);
+  if(cwRisers.length){
+    cwRisers.forEach(r=>{
+      const data=state.building.levels.map((_,i)=>({dwellings:(r.data&&r.data[i]?(+r.data[i].dwellings||0):0),lu:0,extra:0,pump:0}));
+      hw.nodes.push({id:nid(),type:'riser',x:r.x,name:(r.name||'RISER').replace(/\bCW\b/,'HW'),start:(r.start!=null?r.start:state.building.groundIdx),data,flip:r.flip});
+    });
+  } else {
+    const data=state.building.levels.map(()=>blankLevel());
+    for(let i=state.building.groundIdx;i<levelCount();i++) data[i].dwellings=4;
+    hw.nodes.push({id:nid(),type:'riser',x:snap(420),name:'HW RISER 1',start:state.building.groundIdx,data});
+  }
+  hw.nodes.filter(n=>n.type==='riser').sort((a,b)=>a.x-b.x).forEach(r=>{
+    syncRiserData(r);
+    const top=riserTopIdx(r);
+    const att={node:r.id,level:top}, q=attachPoint(att), pp={x:plant.x,y:plant.y};
+    const runY=Math.min(pp.y,q.y);
+    hw.pipes.push({id:nid(),pts:dedupe([{...pp},{x:pp.x,y:runY},{x:q.x,y:runY},{...q}]),a:{node:plant.id},b:att});
+  });
+}
+function setMode(m){
+  ui.mode=m; ui.draft=null; ui.hover=null; ui.filletFirst=null;
+  document.getElementById('mode-select').classList.toggle('active',m==='select');
+  document.getElementById('mode-draw').classList.toggle('active',m==='draw');
+  document.getElementById('mode-fillet').classList.toggle('active',m==='fillet');
+  document.getElementById('canvas-wrap').style.cursor = m==='select'?'default':'crosshair';
+  updateHint(); render();
+}
+document.getElementById('mode-select').addEventListener('click',()=>setMode('select'));
+document.getElementById('mode-draw').addEventListener('click',()=>setMode('draw'));
+document.getElementById('mode-fillet').addEventListener('click',()=>setMode('fillet'));
+document.getElementById('btn-delete').addEventListener('click',deleteSelected);
+document.getElementById('btn-fit').addEventListener('click',fitView);
+const matSel=document.getElementById('net-material'), velInp=document.getElementById('net-vel');
+matSel.addEventListener('change',()=>{ curSvc().network.material=matSel.value; renderPanel(); render(); });
+velInp.addEventListener('input',()=>{ const v=parseFloat(velInp.value); if(v>0){ curSvc().network.maxVelocity=v; renderPanel(); render(); }});
+
+// ---- service (sheet) switching: Cold water ⇄ Hot water ----
+function syncServiceUI(){
+  document.querySelectorAll('[data-svc]').forEach(b=>b.classList.toggle('active', b.getAttribute('data-svc')===state.activeService));
+  const hw = state.activeService==='hw';
+  document.documentElement.classList.toggle('svc-hw', hw); // hot-water sheet renders red (see :root.svc-hw)
+  const show=(sel,on)=>{ const e=document.querySelector(sel); if(e) e.style.display=on?'':'none'; };
+  show('[data-add="source"]', !hw); show('[data-add="plant"]', hw); show('#btn-hwsetup', hw);
+  const sub=document.querySelector('.brand span'); if(sub) sub.textContent = hw ? 'Hot Water · Pipe Sizer' : 'Cold Water · Pipe Sizer';
+}
+function switchService(to){
+  if(!state.services[to] || to===state.activeService) return;
+  ui.draft=null; ui.filletFirst=null;
+  state.activeService=to;
+  if(to==='hw' && curSvc().nodes.length===0 && state.services.cw.nodes.some(n=>n.type==='riser')) setupHotWaterFromCW(true);
+  matSel.value=curSvc().network.material; velInp.value=curSvc().network.maxVelocity;
+  setMode('select'); selectNone(); syncServiceUI(); render(); fitView();
+}
+document.querySelectorAll('[data-svc]').forEach(b=>b.addEventListener('click',()=>switchService(b.getAttribute('data-svc'))));
+
+function updateHint(){
+  const h=document.getElementById('hint');
+  if(ui.mode==='draw'){
+    h.textContent = ui.draft ? 'Click waypoints · click a node/riser/pipe to connect · Enter = end open · Esc = cancel'
+                             : 'Draw pipe — click a start: source, riser (any level), tee, a pipe (to T off), or empty grid';
+    h.style.display='block';
+  } else if(ui.mode==='fillet'){
+    h.textContent = ui.filletFirst!=null ? 'Fillet — click the second pipe' : 'Fillet — click the first pipe';
+    h.style.display='block';
+  } else h.style.display='none';
+}
+
+// ====================== save / load ======================
+document.getElementById('btn-save').addEventListener('click',()=>{
+  const data=JSON.stringify({version:4,building:state.building,activeService:state.activeService,services:state.services,nextId:state.nextId},null,2);
+  const blob=new Blob([data],{type:'application/json'}); const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  const jn=(state.building.job&&state.building.job.number)||'gfb_schematic';
+  a.href=url; a.download=jn.replace(/[^\w\-]+/g,'_')+'.json'; a.click(); URL.revokeObjectURL(url);
+});
+document.getElementById('btn-load').addEventListener('click',()=>document.getElementById('file-input').click());
+document.getElementById('file-input').addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f) return; const rd=new FileReader();
+  rd.onload=()=>{ try{ loadState(JSON.parse(rd.result)); }catch(err){ alert('Could not read that file: '+err.message); } };
+  rd.readAsText(f); e.target.value='';
+});
+function loadState(d){
+  // ---- resolve the shared building ----
+  let building=null;
+  if(d.building && Array.isArray(d.building.levels) && d.building.levels.length){
+    building=d.building;
+    if(building.groundIdx==null) building.groundIdx=0;
+    if(!building.job) building.job={name:'',number:''};
+  }
+  // ---- resolve per-service slices (v4 has d.services; v1/v2/v3 are a single cold-water set) ----
+  let services = d.services || {
+    cw:{ network:d.network||{material:'copper_type_b',maxVelocity:DEFAULT_MAX_VEL}, nodes:d.nodes||[], pipes:d.pipes||[] },
+    hw:{ network:{material:'copper_type_b',maxVelocity:1.2}, nodes:[], pipes:[] }
+  };
+  if(!services.cw) services.cw={network:{material:'copper_type_b',maxVelocity:DEFAULT_MAX_VEL},nodes:[],pipes:[]};
+  if(!services.hw) services.hw={network:{material:'copper_type_b',maxVelocity:1.2},nodes:[],pipes:[]};
+  Object.keys(services).forEach(k=>{ const s=services[k];
+    if(!s.network) s.network={material:'copper_type_b',maxVelocity:k==='hw'?1.2:DEFAULT_MAX_VEL};
+    if(!Array.isArray(s.nodes)) s.nodes=[]; if(!Array.isArray(s.pipes)) s.pipes=[]; });
+  // v1 fallback: risers carried their own named levels
+  if(!building){
+    let names=null;
+    Object.keys(services).forEach(k=>services[k].nodes.forEach(n=>{ if(n.type==='riser'&&Array.isArray(n.levels)&&(!names||n.levels.length>names.length)) names=n.levels.map(x=>x.name||''); }));
+    building={job:{name:'',number:''},levels: names&&names.length? names.map((s,i)=>s||('LEVEL '+i)) : defaultLevelNames(0,5), groundIdx:0};
+  }
+  state.building=building; state.services=services;
+  // ---- normalize each sheet (getNode/attachPoint read the active service, so switch per pass) ----
+  Object.keys(services).forEach(key=>{
+    state.activeService=key; const svc=services[key];
+    svc.nodes.forEach(n=>{
+      if(n.type!=='riser') return;
+      if(!Array.isArray(n.data)) n.data=(n.levels||[]).map(x=>({dwellings:+x.dwellings||0,lu:+x.lu||0,extra:+x.extra||0,pump:+x.pump||0}));
+      delete n.levels; delete n.y;
+      syncRiserData(n);
+      if(n.start==null){ let s=null; for(let i=0;i<n.data.length;i++){ if(levelHasDemand(n.data[i])){ s=i; break; } } n.start = s!=null? s : state.building.groundIdx; }
+    });
+    // v1/v2 pipes were {a: nodeId, b: nodeId} — convert to attached polylines
+    svc.pipes=svc.pipes.filter(p=>p&&(p.pts||typeof p.a==='number')).map(p=>{
+      if(p.pts) return p;
+      const na=getNode(p.a), nb=getNode(p.b);
+      if(!na||!nb) return null;
+      const attA= na.type==='riser'? {node:na.id,level:riserStartIdx(na)} : {node:na.id};
+      const attB= nb.type==='riser'? {node:nb.id,level:riserStartIdx(nb)} : {node:nb.id};
+      const A=attachPoint(attA), B=attachPoint(attB);
+      return {id:p.id, pts:dedupe([A,{x:B.x,y:A.y},B]), a:attA, b:attB};
+    }).filter(Boolean);
+  });
+  state.activeService = (d.activeService && services[d.activeService]) ? d.activeService : 'cw';
+  let maxId=0; Object.keys(services).forEach(k=>{ services[k].nodes.forEach(n=>maxId=Math.max(maxId,n.id||0)); services[k].pipes.forEach(p=>maxId=Math.max(maxId,p.id||0)); });
+  state.nextId = d.nextId || (maxId+1);
+  matSel.value=curSvc().network.material; velInp.value=curSvc().network.maxVelocity;
+  document.getElementById('setup').classList.add('hidden');
+  setMode('select'); selectNone(); syncServiceUI(); fitView();
+}
+
+// ====================== job setup page ======================
+const setup={ levels:[], groundIdx:0, risers:[] };
+function setupGenLevels(){
+  const b=Math.max(0,Math.min(6,parseInt(document.getElementById('s-basements').value)||0));
+  const a=Math.max(0,Math.min(60,parseInt(document.getElementById('s-levels').value)||0));
+  setup.levels=defaultLevelNames(b,a); setup.groundIdx=b;
+  setup.risers.forEach(r=>{ r.from=Math.min(r.from,setup.levels.length-1); r.to=Math.min(r.to,setup.levels.length-1); });
+  renderSetupLevels(); renderSetupRisers();
+}
+function renderSetupLevels(){
+  const host=document.getElementById('s-levellist'); host.innerHTML='';
+  const head=document.createElement('div'); head.className='lvl-head b';
+  head.innerHTML='<div>Level (top first)</div><div>＋</div><div>×</div>';
+  host.appendChild(head);
+  for(let i=setup.levels.length-1;i>=0;i--){
+    const row=document.createElement('div'); row.className='lvl-row b'+(i===setup.groundIdx?' ground':'');
+    row.innerHTML=`<input value="${escapeHtml(setup.levels[i])}">
+      <button class="xbtn add" title="Insert mezzanine above">＋</button>
+      <button class="xbtn" title="Remove">×</button>`;
+    row.querySelector('input').addEventListener('input',e=>{ setup.levels[i]=e.target.value; renderSetupRisers(); });
+    row.querySelector('.add').addEventListener('click',()=>{
+      setup.levels.splice(i+1,0,'MEZZANINE');
+      if(i+1<=setup.groundIdx) setup.groundIdx++;
+      setup.risers.forEach(r=>{ if(r.from>=i+1)r.from++; if(r.to>=i+1)r.to++; });
+      renderSetupLevels(); renderSetupRisers();
+    });
+    row.querySelector('.xbtn:not(.add)').addEventListener('click',()=>{
+      if(setup.levels.length<=1) return;
+      setup.levels.splice(i,1);
+      if(i<setup.groundIdx) setup.groundIdx--;
+      if(setup.groundIdx>=setup.levels.length) setup.groundIdx=setup.levels.length-1;
+      setup.risers.forEach(r=>{ if(r.from>i)r.from--; else if(r.from===i)r.from=Math.max(0,i-1);
+                                if(r.to>i)r.to--; else if(r.to===i)r.to=Math.max(0,i-1); });
+      renderSetupLevels(); renderSetupRisers();
+    });
+    host.appendChild(row);
+  }
+}
+function renderSetupRisers(){
+  const host=document.getElementById('s-risers'); host.innerHTML='';
+  const head=document.createElement('div'); head.className='rg-head';
+  head.innerHTML='<div>Name</div><div>From</div><div>To</div><div>Dw / level</div><div></div>';
+  host.appendChild(head);
+  const opts=(sel)=>setup.levels.map((nm,i)=>`<option value="${i}" ${i===sel?'selected':''}>${escapeHtml(nm)}</option>`).join('');
+  setup.risers.forEach((r,ri)=>{
+    const row=document.createElement('div'); row.className='rg-row';
+    row.innerHTML=`<input value="${escapeHtml(r.name)}" data-f="name">
+      <select data-f="from">${opts(r.from)}</select>
+      <select data-f="to">${opts(r.to)}</select>
+      <input type="number" min="0" value="${r.dw}" data-f="dw">
+      <button class="xbtn" title="Remove riser">×</button>`;
+    row.querySelectorAll('input,select').forEach(inp=>{
+      inp.addEventListener('input',e=>{ const f=inp.getAttribute('data-f');
+        if(f==='name') r.name=e.target.value;
+        else if(f==='dw') r.dw=parseFloat(e.target.value)||0;
+        else r[f]=parseInt(e.target.value);
+      });
+    });
+    row.querySelector('.xbtn').addEventListener('click',()=>{ setup.risers.splice(ri,1); renderSetupRisers(); });
+    host.appendChild(row);
+  });
+}
+function openSetup(allowCancel){
+  document.getElementById('s-jobname').value=(state.building.job&&state.building.job.name)||'';
+  document.getElementById('s-jobno').value=(state.building.job&&state.building.job.number)||'';
+  document.getElementById('s-material').value=curSvc().network.material;
+  document.getElementById('s-vel').value=curSvc().network.maxVelocity;
+  document.getElementById('s-cancel').style.display=allowCancel?'':'none';
+  if(!setup.levels.length) setupGenLevels();
+  if(!setup.risers.length){
+    setup.risers=[{name:'CW RISER 1',from:setup.groundIdx,to:setup.levels.length-1,dw:4},
+                  {name:'CW RISER 2',from:setup.groundIdx,to:setup.levels.length-1,dw:3}];
+  }
+  renderSetupLevels(); renderSetupRisers();
+  document.getElementById('setup').classList.remove('hidden');
+}
+document.getElementById('s-basements').addEventListener('input',setupGenLevels);
+document.getElementById('s-levels').addEventListener('input',setupGenLevels);
+document.getElementById('s-addriser').addEventListener('click',()=>{
+  setup.risers.push({name:'CW RISER '+(setup.risers.length+1),from:setup.groundIdx,to:setup.levels.length-1,dw:4});
+  renderSetupRisers();
+});
+document.getElementById('s-cancel').addEventListener('click',()=>document.getElementById('setup').classList.add('hidden'));
+document.getElementById('s-start').addEventListener('click',()=>{
+  state.building={job:{name:document.getElementById('s-jobname').value,number:document.getElementById('s-jobno').value},
+    levels:[...setup.levels], groundIdx:setup.groundIdx};
+  curSvc().network.material=document.getElementById('s-material').value;
+  const v=parseFloat(document.getElementById('s-vel').value); curSvc().network.maxVelocity=v>0?v:DEFAULT_MAX_VEL;
+  curSvc().nodes=[]; curSvc().pipes=[]; state.nextId=1;
+  const src={id:nid(),type:'source',x:snap(160),y:snap(levelY(state.building.groundIdx)+56),name:'MAINS SUPPLY'}; // in the ground, below the ground line
+  curSvc().nodes.push(src);
+  setup.risers.forEach((r,k)=>{
+    const lo=Math.min(r.from,r.to), hi=Math.max(r.from,r.to);
+    const node={id:nid(),type:'riser',x:snap(420+k*340),name:r.name||('CW RISER '+(k+1)),
+      start:lo, data:state.building.levels.map(()=>blankLevel())};
+    for(let i=lo;i<=hi;i++) node.data[i].dwellings=r.dw;
+    curSvc().nodes.push(node);
+  });
+  // auto-draw the connecting main: source → each riser's start level, chained left to right
+  // auto-draw the connecting main: source → each riser's start level, chained left to right,
+  // with riser-to-riser runs crossing in the ceiling of the connection level
+  let prevAtt={node:src.id}, prevPt={x:src.x,y:src.y};
+  [...allRisers()].sort((a,b)=>a.x-b.x).forEach(r=>{
+    const att={node:r.id,level:riserStartIdx(r)};
+    const q=attachPoint(att);
+    let pts;
+    if(prevAtt.level!=null){ // riser to riser: straight across in the ceiling, clear of the meter branches
+      const ry=Math.min(prevPt.y,q.y);
+      pts=[{...prevPt},{x:prevPt.x,y:ry},{x:q.x,y:ry},{...q}];
+    } else {
+      pts= Math.abs(q.y-prevPt.y)<0.5 ? [{...prevPt},{...q}] : [{...prevPt},{x:q.x,y:prevPt.y},{...q}];
+    }
+    curSvc().pipes.push({id:nid(),pts:dedupe(pts),a:prevAtt,b:att});
+    prevAtt=att; prevPt=q;
+  });
+  matSel.value=curSvc().network.material; velInp.value=curSvc().network.maxVelocity;
+  document.getElementById('setup').classList.add('hidden');
+  setMode('select'); selectNone(); fitView();
+});
+document.getElementById('btn-setup').addEventListener('click',()=>{
+  if(curSvc().nodes.length===0 || confirm('Job setup starts a NEW drawing (current canvas is replaced — Save first if you need it). Continue?'))
+    openSetup(true);
+});
+document.getElementById('btn-hwsetup').addEventListener('click',()=>{
+  setupHotWaterFromCW(false);
+  setMode('select'); selectNone(); syncServiceUI(); render(); fitView();
+});
+
+// ====================== boot ======================
+matSel.value=curSvc().network.material; velInp.value=curSvc().network.maxVelocity;
+syncServiceUI(); selectNone(); updateHint(); fitView(); openSetup(false);
+</script>
+</body>
+</html>
