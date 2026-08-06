@@ -202,6 +202,9 @@
           </label>
           <label>Max velocity (m/s)<input class="field" id="s-vel" type="number" step="0.1" min="0.1" value="2.5"></label>
         </div>
+        <div class="sect">Pressure &amp; pump duty</div>
+        <div id="s-rl"></div>
+        <p class="empty" style="margin-top:6px">Optional — leave blank to skip pressure. Editable afterwards on the <b>mains supply</b>, and overridable per riser. Floor to floor + min pressure give the level pressures and PRVs; add the R.L.s, inlet pressure and friction loss for pump duty.</p>
       </div>
       <div class="col">
         <div class="sect">Risers</div>
@@ -409,21 +412,36 @@ function riserBaseFlow(node){
   return curDef().demand(dw, lu, extra, pump);
 }
 
-// pressure profile for one riser. n.rl holds the FRONT PAGE H9-H12 / J9-J11 inputs; the duty
-// flow is the riser's own diversified demand, the analogue of L15 = MAX(H21:H81).
+// the FRONT PAGE H9-H12 / J9-J11 inputs. They live on the network (entered at job setup, edited
+// on the mains supply / HW plant); a riser may override any one of them, exactly like material
+// and maxVelocity — blank on the riser means "inherit".
+const RL_KEYS=['main','pump','highest','floorToFloor','inletPressure','frictionLoss','minPressure'];
+const RL_LABELS={main:'R.L. of main (m)', pump:'R.L. of pump (m)', highest:'R.L. highest level (m)',
+  floorToFloor:'Floor to floor (m)', inletPressure:'Inlet pressure (kPa)',
+  frictionLoss:'Friction loss (kPa)', minPressure:"Min pressure req'd (kPa)"};
+function blankRl(){ const o={}; RL_KEYS.forEach(k=>o[k]=''); return o; }
+function supplyRl(){ const s=curSvc().network; if(!s.supply) s.supply=blankRl(); return s.supply; }
+const blank=v=>v===''||v==null;
+// riser value if entered, otherwise the network supply value
+function resolveRl(n){
+  const own=(n&&n.rl)||{}, sup=supplyRl(), out={};
+  RL_KEYS.forEach(k=>{ out[k] = blank(own[k]) ? sup[k] : own[k]; });
+  return out;
+}
+// pressure profile for one riser; the duty flow is the riser's own diversified demand, the
+// analogue of L15 = MAX(H21:H81).
 function riserPressure(n){
   return pressurePass({
     data: n.data||[],
-    rl: n.rl||{},
+    rl: resolveRl(n),
     flow: riserBaseFlow(n),
     material: n.material||curSvc().network.material,
     settings: state.settings
   });
 }
-function blankRl(){ return {main:'', pump:'', highest:'', floorToFloor:'', inletPressure:'', frictionLoss:'', minPressure:''}; }
-// does this riser have enough entered for a pressure profile to mean anything?
+// enough entered for a pressure profile to mean anything?
 function hasPressureInputs(n){
-  const r=n.rl||{}; return (+r.floorToFloor>0) && r.minPressure!=='' && r.minPressure!=null;
+  const r=resolveRl(n); return (+r.floorToFloor>0) && !blank(r.minPressure);
 }
 
 // segment sizing, aware of where the riser is fed and of flow exported to other risers.
@@ -458,8 +476,8 @@ let state = {
   nextId:1,
   activeService:'cw',
   services:{
-    cw:{ network:{material:'copper_type_b',maxVelocity:DEFAULT_MAX_VEL}, nodes:[], pipes:[] },
-    hw:{ network:{material:'copper_type_b',maxVelocity:1.2}, nodes:[], pipes:[] }
+    cw:{ network:{material:'copper_type_b',maxVelocity:DEFAULT_MAX_VEL,supply:blankRl()}, nodes:[], pipes:[] },
+    hw:{ network:{material:'copper_type_b',maxVelocity:1.2,supply:blankRl()}, nodes:[], pipes:[] }
   }
 };
 // active-sheet accessor: nodes / pipes / network live per service under state.services
@@ -1084,7 +1102,7 @@ function renderPanel(){
     const n=getNode(ui.selId); if(!n){ selectNone(); return; }
     if(n.type==='riser'){ kicker.textContent='Riser'; title.textContent=n.name; renderRiserPanel(n,body); }
     else if(n.type==='plant'){ kicker.textContent='HW Plant'; title.textContent=n.name; renderPlantPanel(n,body); }
-    else if(n.type==='source'){ kicker.textContent='Source'; title.textContent=n.name; renderNamePanel(n,body,'Supply name'); }
+    else if(n.type==='source'){ kicker.textContent='Source'; title.textContent=n.name; renderSourcePanel(n,body); }
     else { kicker.textContent='Tee / Junction'; title.textContent=n.name||'Tee'; renderNamePanel(n,body,'Label'); }
   } else if(ui.selKind==='pipe'){
     kicker.textContent='Main segment'; title.textContent='Pipe';
@@ -1218,12 +1236,48 @@ function renderPlantPanel(n,body){
       </select></label></div>
     <div class="row"><label>Gas load (MJ/hr)<input class="field" id="pgas" type="number" min="0" value="${n.gasLoad||0}"></label></div>
     <p class="empty" style="margin-top:6px">The plant is the hot-water feed at the roof. Draw the flow main (<kbd>L</kbd>) from here down into each riser — connect at the top level so it feeds from the roof. Gas load is stored for the future gas schematic.</p>
+    <div class="sect">Pressure &amp; pump duty</div>
+    ${rlFields(supplyRl(), null)}
+    <p class="empty" style="margin-top:6px">These feed every riser on the hot-water sheet; each riser can override them. Kept separate from the cold-water sheet's supply values.</p>
+    ${supplySummary()}
     <button class="tool" style="margin-top:8px;width:100%;justify-content:center" id="delp">🗑 Delete plant</button>`;
   body.appendChild(wrap);
   wrap.querySelector('#pname').addEventListener('input',e=>{ n.name=e.target.value; document.getElementById('p-title').textContent=n.name; render(); });
+  bindRlFields(wrap, supplyRl());
   const ps=wrap.querySelector('#ptype'); ps.value=n.plantType; ps.addEventListener('change',e=>{ n.plantType=e.target.value; render(); });
   wrap.querySelector('#pgas').addEventListener('input',e=>{ n.gasLoad=parseFloat(e.target.value)||0; });
   wrap.querySelector('#delp').addEventListener('click',deleteSelected);
+}
+// the mains supply owns the job's pressure inputs — every riser inherits them unless it overrides
+function renderSourcePanel(n,body){
+  const sup=supplyRl();
+  const wrap=document.createElement('div');
+  wrap.innerHTML=`<div class="row"><label>Supply name<input class="field" id="nm" value="${escapeHtml(n.name||'')}"></label></div>
+    <div class="sect">Pressure &amp; pump duty</div>
+    ${rlFields(sup, null)}
+    <p class="empty" style="margin-top:6px">These feed every riser on this sheet. A riser can override any of them in its own panel. Floor to floor + min pressure drive the level pressures and PRVs; the R.L.s, inlet pressure and friction loss add pump duty and the supply warnings.</p>
+    ${supplySummary()}
+    <button class="tool" style="margin-top:10px;width:100%;justify-content:center" id="del">🗑 Delete</button>`;
+  body.appendChild(wrap);
+  wrap.querySelector('#nm').addEventListener('input',ev=>{ n.name=ev.target.value; document.getElementById('p-title').textContent=n.name; render(); });
+  bindRlFields(wrap, sup);
+  wrap.querySelector('#del').addEventListener('click',deleteSelected);
+}
+// roll-up across every riser fed from this supply, so the source panel is worth opening
+function supplySummary(){
+  const rs=allRisers().filter(hasPressureInputs);
+  if(!rs.length) return '<div class="readout" style="margin-top:10px"><div><span class="k">Pressure profile</span><span class="v">— enter floor to floor + min pressure</span></div></div>';
+  let worst=null, prvRisers=0, dw=0, kW=0;
+  rs.forEach(r=>{ const pr=riserPressure(r);
+    pr.byLevel.forEach(b=>{ if(b.pressure!=null && (worst==null||b.pressure>worst)) worst=b.pressure; });
+    if(pr.firstPrvIdx!=null){ prvRisers++; dw+=pr.prvDwellings; }
+    if(pr.duty) kW=Math.max(kW,pr.duty.kW); });
+  const rows=[['Risers on this supply', String(rs.length)],
+              ['Highest level pressure', Math.round(worst)+' kPa']];
+  if(prvRisers) rows.push(['PRVs required', dw+' dwellings on '+prvRisers+' riser'+(prvRisers===1?'':'s')]);
+  if(kW) rows.push(['Largest pump duty', kW+' kW']);
+  return `<div class="readout" style="margin-top:10px">${rows.map(r=>
+    `<div><span class="k">${r[0]}</span><span class="v">${escapeHtml(r[1])}</span></div>`).join('')}</div>`;
 }
 function renderNamePanel(n,body,label){
   const wrap=document.createElement('div');
@@ -1268,20 +1322,9 @@ function renderRiserPanel(n,body){
         </select>
       </label>
     </div>
-    <div class="sect">Pressure &amp; pump duty</div>
-    <div class="row">
-      <label>R.L. of main (m)<input class="field rl" data-rl="main" type="number" step="0.1" value="${escapeHtml(String(rl.main??''))}"></label>
-      <label>R.L. of pump (m)<input class="field rl" data-rl="pump" type="number" step="0.1" value="${escapeHtml(String(rl.pump??''))}"></label>
-      <label>R.L. highest level (m)<input class="field rl" data-rl="highest" type="number" step="0.1" value="${escapeHtml(String(rl.highest??''))}"></label>
-    </div>
-    <div class="row">
-      <label>Floor to floor (m)<input class="field rl" data-rl="floorToFloor" type="number" step="0.1" value="${escapeHtml(String(rl.floorToFloor??''))}"></label>
-      <label>Inlet pressure (kPa)<input class="field rl" data-rl="inletPressure" type="number" step="1" value="${escapeHtml(String(rl.inletPressure??''))}"></label>
-    </div>
-    <div class="row">
-      <label>Friction loss (kPa)<input class="field rl" data-rl="frictionLoss" type="number" step="1" value="${escapeHtml(String(rl.frictionLoss??''))}"></label>
-      <label>Min pressure req'd (kPa)<input class="field rl" data-rl="minPressure" type="number" step="1" value="${escapeHtml(String(rl.minPressure??''))}"></label>
-    </div>
+    <div class="sect">Pressure &amp; pump duty — overrides</div>
+    ${rlFields(rl, supplyRl())}
+    <p class="empty" style="margin-top:6px">Blank = inherited from the mains supply (shown greyed). Type a value to override it for this riser only.</p>
     ${pr.warnings.map(w=>`<p class="empty warn" style="margin:8px 0 0">⚠ ${escapeHtml(w.text)}</p>`).join('')}
     ${pr.firstPrvIdx!=null?`<p class="empty warn" style="margin:8px 0 0">⚠ PRV REQUIRED — ${pr.prvDwellings} DWELLING${pr.prvDwellings===1?'':'S'} AT ${escapeHtml(state.building.levels[pr.firstPrvIdx]||'')} AND BELOW (${pr.prvLevels} level${pr.prvLevels===1?'':'s'})</p>`:''}
     ${pressureReadout(pr)}
@@ -1309,10 +1352,28 @@ function renderRiserPanel(n,body){
   fsel.addEventListener('change',e=>{ n.flip = e.target.value==='right'; render(); });
   const matSel2=wrap.querySelector('#rmat'); matSel2.value=n.material||''; matSel2.addEventListener('change',e=>{ n.material=e.target.value; renderPanel(); render(); });
   wrap.querySelector('#rvel').addEventListener('input',e=>{ n.maxVelocity=e.target.value?parseFloat(e.target.value):null; renderPanel(); render(); });
-  wrap.querySelectorAll('.rl').forEach(inp=>inp.addEventListener('input',e=>{
-    n.rl[e.target.dataset.rl]=e.target.value; renderPanel(); render(); }));
+  bindRlFields(wrap, n.rl);
   wrap.querySelector('#delr').addEventListener('click',deleteSelected);
   renderLevelsEditor(n, wrap.querySelector('#levels'));
+}
+
+// the seven R.L. / pressure inputs, laid out 3 + 2 + 2. `inherited` supplies placeholder text so
+// a blank riser field visibly shows the supply value it is falling back to.
+function rlFields(vals, inherited){
+  const cell=k=>{
+    const step = k==='inletPressure'||k==='frictionLoss'||k==='minPressure' ? '1' : '0.1';
+    const ph = inherited && !blank(inherited[k]) ? inherited[k] : (inherited?'—':'');
+    return `<label>${RL_LABELS[k]}<input class="field rl" data-rl="${k}" type="number" step="${step}"
+      placeholder="${escapeHtml(String(ph))}" value="${escapeHtml(String(vals[k]??''))}"></label>`;
+  };
+  return `<div class="row">${['main','pump','highest'].map(cell).join('')}</div>
+    <div class="row">${['floorToFloor','inletPressure'].map(cell).join('')}</div>
+    <div class="row">${['frictionLoss','minPressure'].map(cell).join('')}</div>`;
+}
+// wire a set of rlFields to a target object, re-rendering on change
+function bindRlFields(wrap, target){
+  wrap.querySelectorAll('.rl').forEach(inp=>inp.addEventListener('input',e=>{
+    target[e.target.dataset.rl]=e.target.value; renderPanel(); render(); }));
 }
 
 // pump duty block — L15 (flow), M15 (pressure), N15 (elec load), J12 (max pressure in pipe)
@@ -1552,6 +1613,7 @@ function loadState(d){
   if(!services.hw) services.hw={network:{material:'copper_type_b',maxVelocity:1.2},nodes:[],pipes:[]};
   Object.keys(services).forEach(k=>{ const s=services[k];
     if(!s.network) s.network={material:'copper_type_b',maxVelocity:k==='hw'?1.2:DEFAULT_MAX_VEL};
+    s.network.supply=Object.assign(blankRl(), s.network.supply||{}); // absent before v5
     if(!Array.isArray(s.nodes)) s.nodes=[]; if(!Array.isArray(s.pipes)) s.pipes=[]; });
   // v1 fallback: risers carried their own named levels
   if(!building){
@@ -1660,6 +1722,7 @@ function openSetup(allowCancel){
   document.getElementById('s-jobno').value=(state.building.job&&state.building.job.number)||'';
   document.getElementById('s-material').value=curSvc().network.material;
   document.getElementById('s-vel').value=curSvc().network.maxVelocity;
+  document.getElementById('s-rl').innerHTML=rlFields(supplyRl(), null); // blank on a new job
   document.getElementById('s-cancel').style.display=allowCancel?'':'none';
   if(!setup.levels.length) setupGenLevels();
   if(!setup.risers.length){
@@ -1681,6 +1744,8 @@ document.getElementById('s-start').addEventListener('click',()=>{
     levels:[...setup.levels], groundIdx:setup.groundIdx};
   curSvc().network.material=document.getElementById('s-material').value;
   const v=parseFloat(document.getElementById('s-vel').value); curSvc().network.maxVelocity=v>0?v:DEFAULT_MAX_VEL;
+  const sup=supplyRl(); // job-setup pressure inputs become this sheet's supply values
+  document.querySelectorAll('#s-rl .rl').forEach(inp=>{ sup[inp.dataset.rl]=inp.value; });
   curSvc().nodes=[]; curSvc().pipes=[]; state.nextId=1;
   const src={id:nid(),type:'source',x:snap(160),y:snap(levelY(state.building.groundIdx)+56),name:'MAINS SUPPLY'}; // in the ground, below the ground line
   curSvc().nodes.push(src);
