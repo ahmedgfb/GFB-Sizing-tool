@@ -728,7 +728,9 @@ function render(){
     const si=longestSeg(pts), a=pts[si], b=pts[si+1];
     const horiz=Math.abs(b.y-a.y)<0.5;
     const lx=(a.x+b.x)/2, ly=(a.y+b.y)/2;
-    const tx= horiz?lx:lx-10, ty= horiz?ly-9:ly-3;
+    // on a horizontal main both labels stack ABOVE the pipe: below it belongs to the meter
+    // branches and their Ø callouts, which a run entering a riser top would otherwise collide with
+    const tx= horiz?lx:lx-10, ty= horiz?ly-24:ly-3;
     const attrs=haloed({'font-family':'var(--mono)','font-size':13,'font-weight':700,fill:color,
       'text-anchor': horiz?'middle':'end'});
     if(r.dn){
@@ -736,7 +738,7 @@ function render(){
       const sub=r.flow.toFixed(2)+' L/s · '+r.vel.toFixed(2)+' m/s';
       const sattrs=haloed({'font-family':'var(--mono)','font-size':11,'font-weight':600,fill:'#3d4d61',
         'text-anchor': horiz?'middle':'end','stroke-width':3});
-      topLabels.push(txt(horiz?lx:lx-10, horiz?ly+17:ly+12, sub, sattrs));
+      topLabels.push(txt(horiz?lx:lx-10, horiz?ly-9:ly+12, sub, sattrs));
     } else if(r.unsized){ topLabels.push(txt(tx,ty,'—',attrs)); }
     else { attrs.fill='var(--warn)'; topLabels.push(txt(tx,ty,'OVER',attrs)); }
     board.appendChild(g);
@@ -847,7 +849,10 @@ function render(){
         const fy=takeoffY(feed)-riserAttachOffset(n,feed), sx=n.x-dir*16;
         g.appendChild(el('path',{d:`M ${sx} ${fy-5} l ${dir*10} 5 l ${-dir*10} 5 z`,fill:'var(--pipe-2)'}));
       }
-      g.appendChild(txt(n.x,yTop-26,n.name,haloed({'text-anchor':'middle','font-family':'var(--sans)','font-size':12,'font-weight':700,'letter-spacing':'.02em',fill:'#26374b'})));
+      // a top-fed riser (the hot-water roof plant case) has the main running in level with the
+      // default name position — lift the name clear of it
+      const nameY = yTop - (riserAttachLevels(n).indexOf(top)>=0 ? 44 : 26);
+      g.appendChild(txt(n.x,nameY,n.name,haloed({'text-anchor':'middle','font-family':'var(--sans)','font-size':12,'font-weight':700,'letter-spacing':'.02em',fill:'#26374b'})));
       board.appendChild(g);
     }
   });
@@ -1539,12 +1544,17 @@ function setupHotWaterFromCW(auto){
     for(let i=state.building.groundIdx;i<levelCount();i++) data[i].dwellings=4;
     hw.nodes.push({id:nid(),type:'riser',x:snap(420),name:'HW RISER 1',start:state.building.groundIdx,data,rl:blankRl()});
   }
+  // chain plant → riser → riser, the same way the cold-water setup chains from the source.
+  // One pipe per riser straight from the plant would stack every run on the same ceiling line:
+  // the mains overlap, and one visible line ends up carrying two different Ø callouts.
+  let prevAtt={node:plant.id}, prevPt={x:plant.x,y:plant.y};
   hw.nodes.filter(n=>n.type==='riser').sort((a,b)=>a.x-b.x).forEach(r=>{
     syncRiserData(r);
     const top=riserTopIdx(r);
-    const att={node:r.id,level:top}, q=attachPoint(att), pp={x:plant.x,y:plant.y};
-    const runY=Math.min(pp.y,q.y);
-    hw.pipes.push({id:nid(),pts:dedupe([{...pp},{x:pp.x,y:runY},{x:q.x,y:runY},{...q}]),a:{node:plant.id},b:att});
+    const att={node:r.id,level:top}, q=attachPoint(att);
+    const runY=Math.min(prevPt.y,q.y);
+    hw.pipes.push({id:nid(),pts:dedupe([{...prevPt},{x:prevPt.x,y:runY},{x:q.x,y:runY},{...q}]),a:prevAtt,b:att});
+    prevAtt={node:r.id,level:top}; prevPt=q;
   });
 }
 function setMode(m){
