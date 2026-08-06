@@ -79,8 +79,10 @@
   .addlvl{margin-top:8px;width:100%;justify-content:center}
   .readout{font-family:var(--mono);font-size:12px;background:var(--rail-2);border:1px solid var(--rail-line);
     border-radius:8px;padding:10px 12px;line-height:1.7}
-  .readout .k{color:var(--ink-faint)}
-  .readout .v{color:var(--ink);float:right}
+  /* flex, not float — a floated value long enough to wrap drops below its key and breaks the box */
+  .readout>div{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+  .readout .k{color:var(--ink-faint);flex:none}
+  .readout .v{color:var(--ink);text-align:right;min-width:0;overflow-wrap:anywhere}
   .readout .v.warn{color:var(--warn)}
   .empty{color:var(--ink-dim);font-size:12px;line-height:1.6}
   .empty.warn{color:var(--warn)}
@@ -660,6 +662,7 @@ function fitView(){
 function render(){
   curSvc().nodes.forEach(n=>{ if(n.type==='riser') syncRiserData(n); });
   const results=sizePipes();
+  syncPressureBtn();
   applyView();
   while(board.firstChild) board.removeChild(board.firstChild);
 
@@ -703,6 +706,9 @@ function render(){
   for(let i=L-1;i>=0;i--) datum(levelY(i),state.building.levels[i], i===state.building.groundIdx);
 
   // ---- pipes ----
+  // callouts are collected and drawn last: nodes paint after pipes, so a label near a node box
+  // (a short plant-to-riser main, say) would otherwise be covered by it.
+  const topLabels=[];
   curSvc().pipes.forEach(p=>{
     const pts=pipePts(p); if(pts.length<2) return;
     const r=results[p.id]||{unsized:true};
@@ -726,13 +732,13 @@ function render(){
     const attrs=haloed({'font-family':'var(--mono)','font-size':13,'font-weight':700,fill:color,
       'text-anchor': horiz?'middle':'end'});
     if(r.dn){
-      g.appendChild(txt(tx,ty,curDef().label+' '+phi(r.dn),attrs));
+      topLabels.push(txt(tx,ty,curDef().label+' '+phi(r.dn),attrs));
       const sub=r.flow.toFixed(2)+' L/s · '+r.vel.toFixed(2)+' m/s';
       const sattrs=haloed({'font-family':'var(--mono)','font-size':11,'font-weight':600,fill:'#3d4d61',
         'text-anchor': horiz?'middle':'end','stroke-width':3});
-      g.appendChild(txt(horiz?lx:lx-10, horiz?ly+17:ly+12, sub, sattrs));
-    } else if(r.unsized){ g.appendChild(txt(tx,ty,'—',attrs)); }
-    else { attrs.fill='var(--warn)'; g.appendChild(txt(tx,ty,'OVER',attrs)); }
+      topLabels.push(txt(horiz?lx:lx-10, horiz?ly+17:ly+12, sub, sattrs));
+    } else if(r.unsized){ topLabels.push(txt(tx,ty,'—',attrs)); }
+    else { attrs.fill='var(--warn)'; topLabels.push(txt(tx,ty,'OVER',attrs)); }
     board.appendChild(g);
   });
 
@@ -808,10 +814,13 @@ function render(){
       // ---- static pressure, PRV flags and pump duty (toggle: ⛅ Pressure in the toolbar)
       const pr = (state.settings.showPressure && hasPressureInputs(n)) ? riserPressure(n) : null;
       if(pr){
+        // sits further out than the Ø callouts so it clears the ▶ feed marker, which occupies
+        // n.x ± 6..16 on this same side at the feed level
+        const pX = n.x - dir*26;
         for(let i=bot;i<=top;i++){
           const b=pr.byLevel[i]; if(!b||b.pressure==null) continue;
           const ty=takeoffY(i);
-          g.appendChild(txt(cX,ty+4,Math.round(b.pressure)+' kPa',
+          g.appendChild(txt(pX,ty+4,Math.round(b.pressure)+' kPa',
             haloed({'text-anchor':cAnchor,'font-family':'var(--mono)','font-size':10,
                     'font-weight':b.needsPrv?700:400, fill:b.needsPrv?'var(--sel)':'#6b7a8d'})));
           if(b.needsPrv && levelHasDemand(n.data[i])){ // PRV on that level's dwelling inlet
@@ -827,9 +836,11 @@ function render(){
           g.appendChild(txt(n.x-95,ly-5,'PRV LIMIT '+pr.settings.maxStatic+' kPa',
             haloed({'text-anchor':'start','font-family':'var(--sans)','font-size':9,'letter-spacing':'.08em',fill:'var(--sel)'})));
         }
-        if(pr.duty) g.appendChild(txt(n.x,yBot+30,
+        // beside the riser, not centred on it — a centred label is cut through by the riser line
+        // and by the incoming main at the base
+        if(pr.duty) g.appendChild(txt(pX,yBot+34,
           `PUMP ${pr.duty.Q.toFixed(2)} L/s · ${Math.round(pr.duty.P)} kPa · ${pr.duty.kW} kW`,
-          haloed({'text-anchor':'middle','font-family':'var(--mono)','font-size':10,fill:'#6b7a8d'})));
+          haloed({'text-anchor':cAnchor,'font-family':'var(--mono)','font-size':10,fill:'#6b7a8d'})));
       }
       // feed marker (where the network feeds this riser) — on the callout side, pointing at the riser
       if(info.feed!=null){
@@ -840,6 +851,9 @@ function render(){
       board.appendChild(g);
     }
   });
+
+  // pipe callouts last, so node boxes never cover them
+  topLabels.forEach(t=>board.appendChild(t));
 }
 
 // ====================== hit testing & geometry helpers ======================
@@ -1238,8 +1252,8 @@ function renderPlantPanel(n,body){
     <p class="empty" style="margin-top:6px">The plant is the hot-water feed at the roof. Draw the flow main (<kbd>L</kbd>) from here down into each riser — connect at the top level so it feeds from the roof. Gas load is stored for the future gas schematic.</p>
     <div class="sect">Pressure &amp; pump duty</div>
     ${rlFields(supplyRl(), null)}
-    <p class="empty" style="margin-top:6px">These feed every riser on the hot-water sheet; each riser can override them. Kept separate from the cold-water sheet's supply values.</p>
     ${supplySummary()}
+    <p class="empty" style="margin-top:8px">These feed every riser on the hot-water sheet; each riser can override them. Kept separate from the cold-water sheet's supply values.</p>
     <button class="tool" style="margin-top:8px;width:100%;justify-content:center" id="delp">🗑 Delete plant</button>`;
   body.appendChild(wrap);
   wrap.querySelector('#pname').addEventListener('input',e=>{ n.name=e.target.value; document.getElementById('p-title').textContent=n.name; render(); });
@@ -1255,8 +1269,8 @@ function renderSourcePanel(n,body){
   wrap.innerHTML=`<div class="row"><label>Supply name<input class="field" id="nm" value="${escapeHtml(n.name||'')}"></label></div>
     <div class="sect">Pressure &amp; pump duty</div>
     ${rlFields(sup, null)}
-    <p class="empty" style="margin-top:6px">These feed every riser on this sheet. A riser can override any of them in its own panel. Floor to floor + min pressure drive the level pressures and PRVs; the R.L.s, inlet pressure and friction loss add pump duty and the supply warnings.</p>
     ${supplySummary()}
+    <p class="empty" style="margin-top:8px">These feed every riser on this sheet. A riser can override any of them in its own panel. Floor to floor + min pressure drive the level pressures and PRVs; the R.L.s, inlet pressure and friction loss add pump duty and the supply warnings.</p>
     <button class="tool" style="margin-top:10px;width:100%;justify-content:center" id="del">🗑 Delete</button>`;
   body.appendChild(wrap);
   wrap.querySelector('#nm').addEventListener('input',ev=>{ n.name=ev.target.value; document.getElementById('p-title').textContent=n.name; render(); });
@@ -1266,7 +1280,8 @@ function renderSourcePanel(n,body){
 // roll-up across every riser fed from this supply, so the source panel is worth opening
 function supplySummary(){
   const rs=allRisers().filter(hasPressureInputs);
-  if(!rs.length) return '<div class="readout" style="margin-top:10px"><div><span class="k">Pressure profile</span><span class="v">— enter floor to floor + min pressure</span></div></div>';
+  // nothing to total yet — a plain hint reads better here than an empty key/value row
+  if(!rs.length) return '<p class="empty" style="margin-top:8px">Enter <b>floor to floor</b> and <b>min pressure req\'d</b> above to see level pressures and PRVs on the drawing.</p>';
   let worst=null, prvRisers=0, dw=0, kW=0;
   rs.forEach(r=>{ const pr=riserPressure(r);
     pr.byLevel.forEach(b=>{ if(b.pressure!=null && (worst==null||b.pressure>worst)) worst=b.pressure; });
@@ -1378,9 +1393,10 @@ function bindRlFields(wrap, target){
 
 // pump duty block — L15 (flow), M15 (pressure), N15 (elec load), J12 (max pressure in pipe)
 function pressureReadout(pr){
+  const hint=t=>`<p class="empty" style="margin-top:8px">${t}</p>`;
+  if(pr.topServed==null) return hint('No level on this riser has dwellings or a plant load, so there is no pressure profile.');
+  if(pr.byLevel[0].pressure==null) return hint('Enter <b>floor to floor</b> and <b>min pressure req\'d</b> — on the mains supply, or here to override.');
   const rows=[];
-  if(pr.topServed==null) rows.push(['Pressure profile','— no level with dwellings or plant load']);
-  else if(pr.byLevel[0].pressure==null) rows.push(['Pressure profile','— enter floor to floor + min pressure']);
   if(pr.duty){
     // one short value per row — .readout .v is float:right and a long string wraps into the next row
     rows.push(['Pump duty flow', pr.duty.Q.toFixed(3)+' L/s']);
@@ -1548,8 +1564,17 @@ const matSel=document.getElementById('net-material'), velInp=document.getElement
 matSel.addEventListener('change',()=>{ curSvc().network.material=matSel.value; renderPanel(); render(); });
 velInp.addEventListener('input',()=>{ const v=parseFloat(velInp.value); if(v>0){ curSvc().network.maxVelocity=v; renderPanel(); render(); }});
 const presBtn=document.getElementById('btn-pressure');
-function syncPressureBtn(){ presBtn.classList.toggle('active', !!state.settings.showPressure); }
-presBtn.addEventListener('click',()=>{ state.settings.showPressure=!state.settings.showPressure; syncPressureBtn(); render(); });
+// lit only when it is both switched on AND there is something to draw, so it never looks active
+// while the drawing shows nothing; the tooltip says which of the two is missing.
+function syncPressureBtn(){
+  const on=!!state.settings.showPressure, any=allRisers().some(hasPressureInputs);
+  presBtn.classList.toggle('active', on && any);
+  presBtn.style.opacity = any ? '' : '.55';
+  presBtn.title = !any
+    ? 'Pressure annotations — enter floor to floor + min pressure on the mains supply first'
+    : (on ? 'Hide' : 'Show') + ' pressure on the drawing: level kPa, PRV symbols, the PRV limit line and pump duty';
+}
+presBtn.addEventListener('click',()=>{ state.settings.showPressure=!state.settings.showPressure; render(); });
 
 // ---- service (sheet) switching: Cold water ⇄ Hot water ----
 function syncServiceUI(){
