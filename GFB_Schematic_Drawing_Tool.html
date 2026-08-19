@@ -35,7 +35,9 @@
   button.tool:hover{border-color:#4a5c72;background:#2a3849}
   button.tool.active{background:var(--sel);border-color:var(--sel);color:#231600;font-weight:600}
   button.tool.ghost{background:transparent}
-  button.tool .kbd{font-family:var(--mono);font-size:10px;background:rgba(255,255,255,.12);border-radius:3px;padding:1px 4px}
+  button.tool:disabled{opacity:.35;cursor:default}
+  button.tool:disabled:hover{background:transparent;border-color:var(--rail-line)}
+  button.tool .kbd{font-family:var(--mono);font-size:10px;background:rgba(255,255,255,.12);border-radius:3px;padding:1px 4px;white-space:nowrap}
   button.tool.active .kbd{background:rgba(0,0,0,.15)}
   select.field,input.field{font-family:var(--sans);font-size:12px;background:var(--rail-2);color:var(--ink);
     border:1px solid var(--rail-line);border-radius:6px;padding:6px 8px}
@@ -155,6 +157,8 @@
       <button class="tool active" id="mode-select">▲ Select <span class="kbd">Esc</span></button>
       <button class="tool" id="mode-draw">⤳ Pipe <span class="kbd">L</span></button>
       <button class="tool" id="mode-fillet">⌐ Fillet <span class="kbd">F</span></button>
+      <button class="tool ghost" id="btn-undo" disabled>↶ <span class="kbd">Ctrl Z</span></button>
+      <button class="tool ghost" id="btn-redo" disabled>↷ <span class="kbd">Ctrl Y</span></button>
       <button class="tool ghost" id="btn-delete">🗑 <span class="kbd">Del</span></button>
       <button class="tool ghost" id="btn-fit" title="Zoom extents (Z). Wheel = zoom, middle- or right-drag = pan">⛶ Fit <span class="kbd">Z</span></button>
     </div>
@@ -507,6 +511,97 @@ function plantKicker(n){ return {gas_central:'GAS · CENTRAL',gas_individual:'GA
 let ui = { mode:'select', selKind:null, selId:null, drag:null, draft:null, hover:null, filletFirst:null, pan:null };
 let riserInfo = {}; // {riserId: {feed, exports}} — refreshed by sizePipes()
 let view = { x:0, y:0, scale:1 }; // AutoCAD-style viewport: world coords of top-left + zoom
+
+// ====================== undo / redo ======================
+// Full-state snapshots: `state` is plain data (no DOM refs, no cycles) and render()/renderPanel()
+// rebuild everything from it, so restoring a JSON clone is a complete undo. ~15 KB for a typical
+// job — far simpler than command/diff undo, and it cannot drift out of step with the editing code.
+const UNDO_LIMIT=60, COALESCE_MS=700;
+let undoStack=[], redoStack=[], pendingUndo=null, lastUndoKey=null, lastUndoAt=0, restoring=false;
+// gestures that span several events (draw = many clicks, drag = down..up) can't use the deferred
+// flush above, so they hold their own baseline and commit it when the gesture ends
+let drawSnap=null, dragSnap=null;
+// the v5 save payload — showPressure is stripped out on restore (see restoreDoc)
+function docSnap(){ return JSON.stringify({building:state.building, settings:state.settings,
+  activeService:state.activeService, services:state.services, nextId:state.nextId}); }
+// A snapshot is only kept if the command actually changed something, so no-ops (a failed fillet,
+// retyping the same value, a click that never became a drag) never leave a dead undo step.
+function commitSnap(snap,label,key){
+  if(restoring||!snap||snap===docSnap()) return false;
+  undoStack.push({snap,label:label||'edit'});
+  if(undoStack.length>UNDO_LIMIT) undoStack.shift();
+  redoStack.length=0; lastUndoKey=key||null; lastUndoAt=Date.now(); syncUndoUI();
+  return true;
+}
+// Records the pre-command baseline, then commits on a timeout — i.e. after the (synchronous)
+// handler and its render() have run, so the "did anything change?" test above is meaningful.
+// Nested calls are ignored: the outermost command owns the step.
+// `key` coalesces continuous edits — same field within COALESCE_MS extends the current step
+// instead of starting a new one, so typing "1250" is one undo, not four.
+function pushUndo(label,key){
+  if(restoring||pendingUndo) return;
+  if(key && key===lastUndoKey && Date.now()-lastUndoAt<COALESCE_MS){ lastUndoAt=Date.now(); return; }
+  pendingUndo={snap:docSnap(),label,key};
+  setTimeout(()=>{ const p=pendingUndo; pendingUndo=null; if(p) commitSnap(p.snap,p.label,p.key); },0);
+}
+// Mirrors loadState's tail but deliberately WITHOUT fitView() — undo must never move the camera.
+function restoreDoc(snapStr){
+  const showPressure=state.settings.showPressure; // pure view toggle: it lives in state but must survive undo
+  const keepKind=ui.selKind, keepId=ui.selId;     // keep the selection if it survives the restore
+  const d=JSON.parse(snapStr);
+  restoring=true;
+  state.building=d.building; state.services=d.services; state.nextId=d.nextId;
+  state.activeService=d.activeService;
+  state.settings=Object.assign({},d.settings,{showPressure});
+  ui.draft=null; ui.filletFirst=null; ui.drag=null; drawSnap=null; // in-flight gestures cannot survive
+  matSel.value=curSvc().network.material; velInp.value=curSvc().network.maxVelocity;
+  setMode('select'); syncServiceUI(); updateHint();
+  // Rebuilding the panel is mandatory, not cosmetic. Panel handlers close over live objects inside
+  // state (bindRlFields' `target`, the level editor's `L`, the pipe panel's `att`); after the state
+  // objects are swapped those closures would write into orphans and edits would vanish.
+  // Hold the selection when the object survived the restore, so undo doesn't also deselect.
+  const alive = keepKind==='node' ? !!getNode(keepId) : keepKind==='pipe' ? !!getPipe(keepId) : false;
+  if(alive){ ui.selKind=keepKind; ui.selId=keepId; renderPanel(); render(); }
+  else selectNone();
+  restoring=false; syncUndoUI();
+}
+function undo(){ if(!undoStack.length) return false;
+  const cur=docSnap(), s=undoStack.pop();
+  redoStack.push({snap:cur,label:s.label}); restoreDoc(s.snap); lastUndoKey=null; return true; }
+function redo(){ if(!redoStack.length) return false;
+  const cur=docSnap(), s=redoStack.pop();
+  undoStack.push({snap:cur,label:s.label}); restoreDoc(s.snap); lastUndoKey=null; return true; }
+function syncUndoUI(){
+  const bu=document.getElementById('btn-undo'), br=document.getElementById('btn-redo');
+  if(!bu||!br) return;
+  const u=undoStack[undoStack.length-1], r=redoStack[redoStack.length-1];
+  bu.disabled=!u; br.disabled=!r;
+  bu.title = u? 'Undo '+u.label+' (Ctrl+Z)' : 'Nothing to undo (Ctrl+Z)';
+  br.title = r? 'Redo '+r.label+' (Ctrl+Y)' : 'Nothing to redo (Ctrl+Y)';
+}
+// One capture-phase listener covers every panel/toolbar field — ~25 handlers, none of them touched.
+// Capture runs BEFORE the element's own listener, so the snapshot is genuinely pre-edit.
+// The coalescing key must be semantic rather than an element reference: bindRlFields re-renders the
+// whole panel on each keystroke (body.innerHTML=''), so the input node is destroyed and recreated
+// per character, but selection + field identity stays stable across that.
+function undoFieldKey(el){
+  // per-level rows carry no id — distinguish them by row position so LEVEL 3 and LEVEL 5 don't merge
+  const row=el.closest('.lvl-row');
+  const ri=row&&row.parentNode? [].indexOf.call(row.parentNode.children,row) : '';
+  return 'f:'+ui.selKind+':'+ui.selId+':'+(el.id||el.dataset.rl||el.dataset.f||'')+':'+ri;
+}
+function undoFieldLabel(el){
+  const lab=el.closest('label');
+  const t=(lab&&lab.textContent||'').trim().split('\n')[0].trim();
+  return t? 'edit '+t.toLowerCase() : 'edit';
+}
+['input','change'].forEach(t=>document.addEventListener(t,e=>{
+  const el=e.target; if(!el||!el.closest) return;
+  if(el.id==='file-input') return;                            // loadState pushes its own step, asynchronously
+  if(el.closest('#setup')||el.closest('#riserdlg')) return;   // scratch models, not the document
+  if(!el.closest('#panel')&&!el.closest('header')) return;
+  pushUndo(undoFieldLabel(el),undoFieldKey(el));
+},true));
 
 const GRID=20, LEVEL_PX=80, SHEET_TOP=70, SHEET_LEFT=20, YARD=300;
 function nid(){ return state.nextId++; }
@@ -1002,6 +1097,7 @@ board.addEventListener('mousedown',e=>{
     const id=+nodeEl.getAttribute('data-node-id');
     const n=getNode(id);
     ui.drag={id,ox:loc.x-n.x,oy:loc.y-(n.y!=null?n.y:0),moved:false,downx:loc.x,downy:loc.y};
+    dragSnap=docSnap(); // committed on mouseup, and only if the node actually moved
   } else if(pipeEl){
     selectPipe_(+pipeEl.getAttribute('data-pipe-id'));
   } else {
@@ -1034,7 +1130,11 @@ window.addEventListener('mousemove',e=>{
 });
 window.addEventListener('mouseup',e=>{
   if(ui.pan && (e.button===1||e.button===2)){ ui.pan=null; return; }
-  if(ui.drag){ if(!ui.drag.moved) selectNode_(ui.drag.id); ui.drag=null; render(); }
+  if(ui.drag){
+    if(ui.drag.moved) commitSnap(dragSnap,'move '+((getNode(ui.drag.id)||{}).type||'node'));
+    else selectNode_(ui.drag.id);
+    dragSnap=null; ui.drag=null; render();
+  }
 });
 // wheel = zoom centred on the cursor (AutoCAD style)
 document.getElementById('canvas-wrap').addEventListener('wheel',e=>{
@@ -1052,15 +1152,26 @@ document.getElementById('canvas-wrap').addEventListener('contextmenu',e=>e.preve
 window.addEventListener('resize',()=>render());
 board.addEventListener('dblclick',e=>{ if(ui.mode==='draw'&&ui.draft) finishDraft(null); });
 window.addEventListener('keydown',e=>{
+  const mod=e.ctrlKey||e.metaKey, k=e.key.toLowerCase();
+  const modalOpen = !document.getElementById('setup').classList.contains('hidden')
+                 || !document.getElementById('riserdlg').classList.contains('hidden');
+  // Undo/redo sit ABOVE the input-focus guard: Ctrl+Z means "undo the job" wherever the cursor is.
+  // (The panel rebuilds itself on every keystroke, so a field's native text-undo is already gone.)
+  if(mod && (k==='z'||k==='y') && !modalOpen){
+    e.preventDefault();
+    const el=document.activeElement;
+    if(el&&el.blur) el.blur(); // renderPanel is about to destroy it; don't let it fire a trailing change
+    if(k==='y'||e.shiftKey) redo(); else undo();
+    return;
+  }
   if(document.activeElement.tagName==='INPUT'||document.activeElement.tagName==='SELECT'||document.activeElement.tagName==='TEXTAREA') return;
-  if(!document.getElementById('setup').classList.contains('hidden')) return;
-  if(!document.getElementById('riserdlg').classList.contains('hidden')) return;
-  const k=e.key.toLowerCase();
+  if(modalOpen) return;
+  if(mod) return; // bare-key commands only — Ctrl+Z must not fall through to fitView()
   if(k==='l'){ setMode('draw'); }
   else if(k==='f'){ setMode('fillet'); }
   else if(k==='z'){ fitView(); }
   else if(e.key==='Escape'){
-    if(ui.draft){ ui.draft=null; updateHint(); render(); }
+    if(ui.draft){ ui.draft=null; commitDraw(); updateHint(); render(); }
     else if(ui.mode!=='select'){ setMode('select'); }
     else selectNone();
   }
@@ -1077,6 +1188,9 @@ function drawClick(e, loc){
   const hit=attachUnder(e,loc);
   const pl=(!hit)?pipeUnder(e):null;
   if(!ui.draft){
+    // a draw spans several clicks, so hold the baseline until the gesture ends (commitDraw).
+    // This also covers the tee splitPipeAt commits mid-draft — cancelling with Esc now takes it back.
+    drawSnap=docSnap();
     if(hit){ ui.draft={pts:[hit.pt],a:hit.att,hover:null}; }
     else if(pl){ const tee=splitPipeAt(pl,loc); ui.draft={pts:[{x:tee.x,y:tee.y}],a:{node:tee.id},hover:null}; }
     else { ui.draft={pts:[{x:snap(loc.x),y:snap(loc.y)}],a:null,hover:null}; }
@@ -1098,11 +1212,15 @@ function drawClick(e, loc){
 }
 function finishDraft(endAtt){
   const d=ui.draft; ui.draft=null;
-  if(!d) return;
+  if(!d){ commitDraw(); return; }
   const pts=dedupe(d.pts);
   if(pts.length>=2) curSvc().pipes.push({id:nid(),pts,a:d.a,b:endAtt});
+  commitDraw();
   updateHint(); render();
 }
+// end of a draw gesture — commits the baseline taken at the first click, or drops it if the
+// gesture left the drawing untouched (commitSnap's no-op guard)
+function commitDraw(){ if(!drawSnap) return; const s=drawSnap; drawSnap=null; commitSnap(s,'draw pipe'); }
 
 // ---- fillet (AutoCAD radius-0 style): click two runs anywhere along them; the clicked
 // sides trim/extend to a square corner and merge into one pipe, regardless of attachments ----
@@ -1163,6 +1281,7 @@ function filletPipes(f1,f2){
   const kbPts=[...kbT.pts].reverse();                  // starts at corner
   const merged={id:nid(), pts:dedupe([...ka.pts, ...kbPts.slice(1)]), a:ka.att, b:kbT.att};
   if(merged.pts.length<2) return false;
+  pushUndo('fillet'); // here, not at the top: every early return above leaves the drawing untouched
   curSvc().pipes=curSvc().pipes.filter(x=>x.id!==A.id&&x.id!==B.id);
   curSvc().pipes.push(merged);
   selectNone();
@@ -1174,6 +1293,8 @@ function selectNode_(id){ ui.selKind='node'; ui.selId=id; renderPanel(); render(
 function selectPipe_(id){ ui.selKind='pipe'; ui.selId=id; renderPanel(); render(); }
 function selectNone(){ ui.selKind=null; ui.selId=null; renderPanel(); render(); }
 function deleteSelected(){
+  if(ui.selKind==null||ui.selId==null) return;
+  pushUndo(ui.selKind==='pipe'?'delete pipe':'delete '+((getNode(ui.selId)||{}).type||'node'));
   if(ui.selKind==='node'){
     curSvc().pipes=curSvc().pipes.filter(p=>!(p.a&&p.a.node===ui.selId)&&!(p.b&&p.b.node===ui.selId));
     curSvc().nodes=curSvc().nodes.filter(n=>n.id!==ui.selId);
@@ -1288,6 +1409,7 @@ function renderBuildingPanel(body){
   wrap.querySelector('#addblvl').addEventListener('click',()=>{ insertLevel(levelCount(),'LEVEL '+(levelCount()-state.building.groundIdx)); renderPanel(); render(); });
 }
 function insertLevel(idx,name){
+  pushUndo('insert level');
   state.building.levels.splice(idx,0,name);
   if(idx<=state.building.groundIdx) state.building.groundIdx++;
   eachRiserAll(r=>{
@@ -1298,6 +1420,7 @@ function insertLevel(idx,name){
   remapAttachLevels(li=> li>=idx? li+1 : li);
 }
 function removeLevel(idx){
+  pushUndo('remove level');
   state.building.levels.splice(idx,1);
   if(idx<state.building.groundIdx) state.building.groundIdx--;
   if(state.building.groundIdx>=levelCount()) state.building.groundIdx=levelCount()-1;
@@ -1533,7 +1656,8 @@ function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&
 // ====================== toolbar ======================
 document.querySelectorAll('[data-add]').forEach(btn=>btn.addEventListener('click',()=>{
   const type=btn.getAttribute('data-add');
-  if(type==='riser'){ openRiserDlg(); return; }
+  if(type==='riser'){ openRiserDlg(); return; } // the dialog pushes its own step on Add
+  pushUndo('add '+type);
   if(type==='plant'){
     const node={id:nid(),type:'plant',x:snap(view.x+viewW()*0.4),y:snap(SHEET_TOP-14),name:'HW PLANT',plantType:'gas_central',gasLoad:0};
     curSvc().nodes.push(node); selectNode_(node.id); return;
@@ -1555,6 +1679,7 @@ function openRiserDlg(){
 }
 document.getElementById('r-cancel').addEventListener('click',()=>document.getElementById('riserdlg').classList.add('hidden'));
 document.getElementById('r-add').addEventListener('click',()=>{
+  pushUndo('add riser');
   let s=parseInt(document.getElementById('r-start').value)||0, t=parseInt(document.getElementById('r-top').value)||0;
   if(t<s){ const tmp=s; s=t; t=tmp; }
   const dw=parseFloat(document.getElementById('r-dw').value)||0;
@@ -1598,6 +1723,7 @@ function setupHotWaterFromCW(auto){
   if(state.activeService!=='hw'){ state.activeService='hw'; matSel.value=curSvc().network.material; velInp.value=curSvc().network.maxVelocity; syncServiceUI(); }
   const hw=curSvc();
   if(!auto && hw.nodes.length && !confirm('Rebuild the hot-water sheet from the cold-water risers? This replaces the current hot-water drawing.')) return;
+  pushUndo('HW setup'); // after the confirm, before the wipe — this replaces the whole sheet
   hw.nodes=[]; hw.pipes=[];
   const plant={id:nid(),type:'plant',x:snap(160),y:snap(SHEET_TOP-14),name:'HW PLANT',plantType:'gas_central',gasLoad:0};
   hw.nodes.push(plant);
@@ -1627,6 +1753,7 @@ function setupHotWaterFromCW(auto){
   });
 }
 function setMode(m){
+  commitDraw(); // leaving draw mode abandons any draft — keep whatever it already committed undoable
   ui.mode=m; ui.draft=null; ui.hover=null; ui.filletFirst=null;
   document.getElementById('mode-select').classList.toggle('active',m==='select');
   document.getElementById('mode-draw').classList.toggle('active',m==='draw');
@@ -1639,6 +1766,8 @@ document.getElementById('mode-draw').addEventListener('click',()=>setMode('draw'
 document.getElementById('mode-fillet').addEventListener('click',()=>setMode('fillet'));
 document.getElementById('btn-delete').addEventListener('click',deleteSelected);
 document.getElementById('btn-fit').addEventListener('click',fitView);
+document.getElementById('btn-undo').addEventListener('click',()=>undo());
+document.getElementById('btn-redo').addEventListener('click',()=>redo());
 const matSel=document.getElementById('net-material'), velInp=document.getElementById('net-vel');
 matSel.addEventListener('change',()=>{ curSvc().network.material=matSel.value; renderPanel(); render(); });
 velInp.addEventListener('input',()=>{ const v=parseFloat(velInp.value); if(v>0){ curSvc().network.maxVelocity=v; renderPanel(); render(); }});
@@ -1720,6 +1849,7 @@ document.getElementById('file-input').addEventListener('change',e=>{
   rd.readAsText(f); e.target.value='';
 });
 function loadState(d){
+  pushUndo('load job'); // before any of the reassignment below — a mistaken Load is recoverable
   // ---- resolve the shared building ----
   let building=null;
   if(d.building && Array.isArray(d.building.levels) && d.building.levels.length){
@@ -1863,6 +1993,7 @@ document.getElementById('s-addriser').addEventListener('click',()=>{
 });
 document.getElementById('s-cancel').addEventListener('click',()=>document.getElementById('setup').classList.add('hidden'));
 document.getElementById('s-start').addEventListener('click',()=>{
+  pushUndo('start drawing'); // wipes the sheet and resets nextId — undo is the safety net
   state.building={job:{name:document.getElementById('s-jobname').value,number:document.getElementById('s-jobno').value},
     levels:[...setup.levels], groundIdx:setup.groundIdx};
   curSvc().network.material=document.getElementById('s-material').value;
@@ -1912,7 +2043,7 @@ document.getElementById('btn-hwsetup').addEventListener('click',()=>{
 // ====================== boot ======================
 matSel.value=curSvc().network.material; velInp.value=curSvc().network.maxVelocity;
 syncPressureBtn();
-syncServiceUI(); selectNone(); updateHint(); fitView(); openSetup(false);
+syncServiceUI(); selectNone(); updateHint(); fitView(); syncUndoUI(); openSetup(false);
 </script>
 </body>
 </html>
