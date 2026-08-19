@@ -149,6 +149,7 @@
       <span class="toollabel">Add</span>
       <button class="tool" data-add="source">◆ Source</button>
       <button class="tool" data-add="plant">▧ HW Plant</button>
+      <button class="tool" data-add="hwu">⬓ HWU</button>
       <button class="tool" data-add="riser">▮ Riser</button>
       <button class="tool" data-add="junction">● Tee</button>
     </div>
@@ -515,7 +516,13 @@ let state = {
 // active-sheet accessor: nodes / pipes / network live per service under state.services
 function curSvc(){ return state.services[state.activeService]; }
 function allServiceSlices(){ return Object.keys(state.services).map(k=>state.services[k]); }
-function plantKicker(n){ return {gas_central:'GAS · CENTRAL',gas_individual:'GAS · INDIVIDUAL',elec_central:'ELEC · CENTRAL',elec_individual:'ELEC · INDIVIDUAL'}[n&&n.plantType] || '◧ HW PLANT'; }
+const CONFIG_LABEL={gas_central:'GAS · CENTRAL',gas_individual:'GAS · INDIVIDUAL',elec_central:'ELEC · CENTRAL',elec_individual:'ELEC · INDIVIDUAL'};
+function plantKicker(n){ return CONFIG_LABEL[n&&n.plantType] || '◧ HW PLANT'; }
+function hwuKicker(n){ return CONFIG_LABEL[n&&n.hwuType] || '⬓ HWU'; }
+// An HWU is a terminal on the cold-water sheet: it shows that the cold feed reaches the hot-water
+// unit. It carries no demand and is NOT a source — see sizePipes, which marks its feed pipe
+// "connected but unsized" so the run doesn't render as a grey no-path error.
+function isHwu(n){ return !!n && n.type==='hwu'; }
 // pipes: {id, pts:[{x,y}...], a:{node,level?}|null, b:{node,level?}|null} — a/b are attachments; free ends are null
 let ui = { mode:'select', selKind:null, selId:null, drag:null, draft:null, hover:null, filletFirst:null, pan:null };
 let riserInfo = {}; // {riserId: {feed, exports}} — refreshed by sizePipes()
@@ -706,6 +713,11 @@ function sizePipes(){
   curSvc().nodes.forEach(n=>{ const pp=pPipe[n.id]; if(pp){ const f=demand[n.id];
     if(f>1e-9){ const pipe=selectPipe(f,mat,vmax); const v=pipe?velocityMs(f,pipe.ID_mm):NaN;
       res[pp.id]={flow:f,dn:pipe?pipe.DN:null,vel:v,over:pipe?v>vmax:true,unsized:false}; } }});
+  // An HWU carries no cold-water demand, so its feed would fall through the f>0 test above and
+  // render as a grey "no path from source" error. It IS connected — flag it so the run draws
+  // normally and is labelled with the unit instead of a Ø.
+  curSvc().nodes.forEach(n=>{ if(!isHwu(n)) return; const pp=pPipe[n.id];
+    if(pp && res[pp.id] && res[pp.id].unsized) res[pp.id]={flow:null,dn:null,vel:null,over:false,unsized:false,annot:n.name||'HWU'}; });
   return res;
 }
 
@@ -750,11 +762,24 @@ function drawBranch(g,n,i,by,dir){
     g.appendChild(el('rect',{x:mx-4.5,y:myTop,width:9,height:12,rx:1.5,fill:'var(--paper)',stroke:'var(--meter)','stroke-width':1.4}));
     g.appendChild(el('circle',{cx:mx,cy:myTop+5,r:2,fill:'var(--meter)'}));
   }
+  // individual hot-water units: one per dwelling on this level, drawn outboard of the meter bank.
+  // Symbol only — the branch is still sized from the level's own cold-water demand.
+  let labelX=endX;
+  if(n.hwu && dw>0){
+    const bw=30, bh=15, bx=endX+dir*6;
+    labelX=endX+dir*(6+bw);
+    g.appendChild(el('line',{x1:endX,y1:by,x2:bx,y2:by,stroke:col,'stroke-width':2.5}));
+    g.appendChild(el('rect',{x:dir>0?bx:bx-bw,y:by-bh/2,width:bw,height:bh,rx:2.5,
+      fill:'var(--paper)',stroke:'#c0392b','stroke-width':1.4}));
+    g.appendChild(txt(bx+dir*(bw/2),by+4,'HWU',{'text-anchor':'middle','font-family':'var(--sans)',
+      'font-size':8,'font-weight':700,'letter-spacing':'.06em',fill:'#c0392b','pointer-events':'none'}));
+  }
   const parts=[];
   if(dw>0) parts.push(dw+' x '+curDef().label+' METERS');
+  if(n.hwu && dw>0) parts.push(dw+' x HWU');
   if(+Ld.lu>0) parts.push((+Ld.lu)+' LU');
   if(+Ld.extra>0) parts.push((+Ld.extra)+' L/s');
-  g.appendChild(txt(endX+dir*8,by+16,parts.join(' + '),
+  g.appendChild(txt(labelX+dir*8,by+16,parts.join(' + '),
     haloed({'text-anchor':dir>0?'start':'end','font-family':'var(--sans)','font-size':10,'letter-spacing':'.03em','font-weight':600,fill:'#44536a','stroke-width':3})));
 }
 function pathFrom(pts){ return pts.map((q,i)=>(i?'L':'M')+' '+q.x+' '+q.y).join(' '); }
@@ -887,7 +912,8 @@ function render(){
       const sattrs=haloed({'font-family':'var(--mono)','font-size':11,'font-weight':600,fill:'#3d4d61',
         'text-anchor': horiz?'middle':'end','stroke-width':3});
       topLabels.push(txt(horiz?lx:lx-10, horiz?ly-9:ly+12, sub, sattrs));
-    } else if(r.unsized){ topLabels.push(txt(tx,ty,'—',attrs)); }
+    } else if(r.annot){ topLabels.push(txt(tx,ty,'TO '+r.annot,attrs)); } // HWU feed — connected, no CW demand
+    else if(r.unsized){ topLabels.push(txt(tx,ty,'—',attrs)); }
     else { attrs.fill='var(--warn)'; topLabels.push(txt(tx,ty,'OVER',attrs)); }
     board.appendChild(g);
   });
@@ -934,6 +960,28 @@ function render(){
       g.appendChild(el('rect',{x,y,width:w,height:h,rx:7,fill:'#8a4b2a',stroke:sel?'var(--sel)':'#5a2f16','stroke-width':sel?3:1.5}));
       g.appendChild(txt(n.x,n.y-3,plantKicker(n),{'text-anchor':'middle','font-family':'var(--sans)','font-size':9,'letter-spacing':'.12em',fill:'#f3d9c4'}));
       g.appendChild(txt(n.x,n.y+12,n.name,{'text-anchor':'middle','font-family':'var(--sans)','font-size':12,'font-weight':600,fill:'#fff'}));
+      board.appendChild(g);
+    } else if(n.type==='hwu'){
+      // terminal box on the cold sheet: shows the cold feed reaches the hot-water unit.
+      // Reads like the issued drawings' plant callout — model, gas load, and a cross-reference note.
+      const g=el('g',{'data-node-id':n.id,style:'cursor:pointer'});
+      const lines=[];
+      if(n.model) lines.push(n.model);
+      if(+n.gasLoad>0) lines.push('GAS LOAD: '+(+n.gasLoad).toLocaleString()+' MJ/hr');
+      const nm=n.name||'HWU';
+      const w=Math.max(150, 9+Math.max(nm.length*8, ...lines.map(s=>s.length*5.6))),
+            h=40+lines.length*13, x=n.x-w/2, y=n.y-h/2;
+      g.appendChild(el('rect',{x:x-14,y:y-14,width:w+28,height:h+28,fill:'transparent'})); // forgiving hit area
+      g.appendChild(el('rect',{x,y,width:w,height:h,rx:6,fill:'var(--paper)',
+        stroke:sel?'var(--sel)':'#c0392b','stroke-width':sel?3:1.6}));
+      g.appendChild(txt(n.x,y+15,hwuKicker(n),{'text-anchor':'middle','font-family':'var(--sans)',
+        'font-size':9,'letter-spacing':'.12em',fill:'#c0392b','pointer-events':'none'}));
+      g.appendChild(txt(n.x,y+31,nm,{'text-anchor':'middle','font-family':'var(--sans)',
+        'font-size':12,'font-weight':700,fill:'#8e2b20','pointer-events':'none'}));
+      lines.forEach((s,i)=>g.appendChild(txt(n.x,y+45+i*13,s,{'text-anchor':'middle',
+        'font-family':'var(--mono)','font-size':10,fill:'#7a4a44','pointer-events':'none'})));
+      if(n.note) g.appendChild(txt(n.x,y+h+14,n.note,haloed({'text-anchor':'middle',
+        'font-family':'var(--sans)','font-size':10,'font-weight':600,'letter-spacing':'.03em',fill:'#c0392b'})));
       board.appendChild(g);
     } else if(n.type==='junction'){
       const g=el('g',{'data-node-id':n.id,style:'cursor:pointer'});
@@ -1409,6 +1457,7 @@ function renderPanel(){
     const n=getNode(ui.selId); if(!n){ selectNone(); return; }
     if(n.type==='riser'){ kicker.textContent='Riser'; title.textContent=n.name; renderRiserPanel(n,body); }
     else if(n.type==='plant'){ kicker.textContent='HW Plant'; title.textContent=n.name; renderPlantPanel(n,body); }
+    else if(n.type==='hwu'){ kicker.textContent='Hot Water Unit'; title.textContent=n.name; renderHwuPanel(n,body); }
     else if(n.type==='source'){ kicker.textContent='Source'; title.textContent=n.name; renderSourcePanel(n,body); }
     else { kicker.textContent='Tee / Junction'; title.textContent=n.name||'Tee'; renderNamePanel(n,body,'Label'); }
   } else if(ui.selKind==='pipe'){
@@ -1416,7 +1465,8 @@ function renderPanel(){
     const r=sizePipes()[ui.selId]||{};
     body.innerHTML=`<div class="readout">
       <div><span class="k">Flow</span><span class="v">${r.flow!=null?r.flow.toFixed(3)+' L/s':'—'}</span></div>
-      <div><span class="k">Size</span><span class="v ${r.over?'warn':''}">${r.dn?phi(r.dn):(r.unsized?'not sized':'OVER CAPACITY')}</span></div>
+      <div><span class="k">Size</span><span class="v ${r.over?'warn':''}">${r.dn?phi(r.dn):(r.annot?('serves '+escapeHtml(r.annot)):(r.unsized?'not sized':'OVER CAPACITY'))}</span></div>
+      ${r.annot?'<div><span class="k">Why no size</span><span class="v">HWU feed — shown connected only, no cold water demand</span></div>':''}
       ${(()=>{ if(!r.unsized) return '';
         const p=getPipe(ui.selId);
         if(p&&(!p.a||!p.b)) return '<div><span class="k">Why</span><span class="v warn">open end ○ — not attached</span></div>';
@@ -1473,6 +1523,7 @@ function renderBuildingPanel(body){
       <div><span class="k">Risers</span><span class="v">${curSvc().nodes.filter(n=>n.type==='riser').length}</span></div>
       <div><span class="k">Sources</span><span class="v">${curSvc().nodes.filter(n=>n.type==='source').length}</span></div>
       <div><span class="k">Plants</span><span class="v">${curSvc().nodes.filter(n=>n.type==='plant').length}</span></div>
+      <div><span class="k">HWUs</span><span class="v">${curSvc().nodes.filter(isHwu).length}</span></div>
       <div><span class="k">Pipes</span><span class="v">${curSvc().pipes.length}</span></div>
     </div>
     <div class="sect">Commands</div>
@@ -1557,6 +1608,39 @@ function renderPlantPanel(n,body){
   wrap.querySelector('#pgas').addEventListener('input',e=>{ n.gasLoad=parseFloat(e.target.value)||0; });
   wrap.querySelector('#delp').addEventListener('click',deleteSelected);
 }
+// The HWU is a terminal, not a load: it records what the cold feed serves and cross-references the
+// hot-water sheet. Deliberately no demand field — cold-water sizes are unaffected by it.
+function renderHwuPanel(n,body){
+  if(!n.hwuType) n.hwuType='gas_central';
+  if(n.note==null) n.note='REFER TO HOT WATER SCHEMATICS';
+  const fed=(sizePipes(), curSvc().pipes.some(p=>(p.a&&p.a.node===n.id)||(p.b&&p.b.node===n.id)));
+  const wrap=document.createElement('div');
+  wrap.innerHTML=`<div class="row"><label>Unit name<input class="field" id="hname" value="${escapeHtml(n.name||'')}"></label></div>
+    <div class="row"><label>Configuration
+      <select class="field" id="htype">
+        <option value="gas_central">Gas · Central</option>
+        <option value="gas_individual">Gas · Individual</option>
+        <option value="elec_central">Electric · Central</option>
+        <option value="elec_individual">Electric · Individual</option>
+      </select></label></div>
+    <div class="row"><label>Model / description<input class="field" id="hmodel" placeholder="e.g. RINNAI DDF5 28E NSF 330HT" value="${escapeHtml(n.model||'')}"></label></div>
+    <div class="row"><label>Gas load (MJ/hr)<input class="field" id="hgas" type="number" min="0" value="${n.gasLoad||0}"></label></div>
+    <div class="row"><label>Note under the box<input class="field" id="hnote" value="${escapeHtml(n.note||'')}"></label></div>
+    <div class="readout" style="margin-top:12px">
+      <div><span class="k">Cold water</span><span class="v">${fed?'connected':'not connected'}</span></div>
+      <div><span class="k">Adds to CW demand</span><span class="v">no — symbol only</span></div>
+    </div>
+    <p class="empty" style="margin-top:8px">Draw the cold feed (<kbd>L</kbd>) from a main or riser into this box to show the unit is served. The run is labelled <b>TO ${escapeHtml(n.name||'HWU')}</b> and carries no flow, so it does not change any cold-water pipe size.</p>
+    <p class="empty" style="margin-top:8px">For <b>individual</b> units per dwelling, tick <b>Individual HWUs</b> on a riser instead — each served level then shows an HWU on its meter branch.</p>
+    <button class="tool" style="margin-top:8px;width:100%;justify-content:center" id="delh">🗑 Delete HWU</button>`;
+  body.appendChild(wrap);
+  wrap.querySelector('#hname').addEventListener('input',e=>{ n.name=e.target.value; document.getElementById('p-title').textContent=n.name; render(); });
+  const ts=wrap.querySelector('#htype'); ts.value=n.hwuType; ts.addEventListener('change',e=>{ n.hwuType=e.target.value; render(); });
+  wrap.querySelector('#hmodel').addEventListener('input',e=>{ n.model=e.target.value; render(); });
+  wrap.querySelector('#hgas').addEventListener('input',e=>{ n.gasLoad=parseFloat(e.target.value)||0; render(); });
+  wrap.querySelector('#hnote').addEventListener('input',e=>{ n.note=e.target.value; render(); });
+  wrap.querySelector('#delh').addEventListener('click',deleteSelected);
+}
 // the mains supply owns the job's pressure inputs — every riser inherits them unless it overrides
 function renderSourcePanel(n,body){
   const sup=supplyRl();
@@ -1632,6 +1716,9 @@ function renderRiserPanel(n,body){
         </select>
       </label>
     </div>
+    <label style="flex-direction:row;align-items:center;gap:8px;margin-top:8px">
+      <input type="checkbox" id="rhwu" ${n.hwu?'checked':''} style="width:auto;margin:0"> Individual HWUs — one per dwelling on each served level
+    </label>
     <div class="sect">Pressure &amp; pump duty — overrides</div>
     ${rlFields(rl, supplyRl())}
     <p class="empty" style="margin-top:6px">Blank = inherited from the mains supply (shown greyed). Type a value to override it for this riser only.</p>
@@ -1666,6 +1753,7 @@ function renderRiserPanel(n,body){
   });
   const fsel=wrap.querySelector('#rflip'); fsel.value=n.flip?'right':'left';
   fsel.addEventListener('change',e=>{ n.flip = e.target.value==='right'; render(); });
+  wrap.querySelector('#rhwu').addEventListener('change',e=>{ n.hwu=e.target.checked||undefined; render(); });
   const matSel2=wrap.querySelector('#rmat'); matSel2.value=n.material||''; matSel2.addEventListener('change',e=>{ n.material=e.target.value; renderPanel(); render(); });
   wrap.querySelector('#rvel').addEventListener('input',e=>{ n.maxVelocity=e.target.value?parseFloat(e.target.value):null; renderPanel(); render(); });
   bindRlFields(wrap, n.rl);
@@ -1777,6 +1865,11 @@ document.querySelectorAll('[data-add]').forEach(btn=>btn.addEventListener('click
   pushUndo('add '+type);
   if(type==='plant'){
     const node={id:nid(),type:'plant',x:snap(view.x+viewW()*0.4),y:snap(SHEET_TOP-14),name:'HW PLANT',plantType:'gas_central',gasLoad:0};
+    curSvc().nodes.push(node); selectNode_(node.id); return;
+  }
+  if(type==='hwu'){
+    const node={id:nid(),type:'hwu',x:snap(view.x+viewW()*0.5),y:snap(levelY(state.building.groundIdx)-140),
+      name:'HWU', hwuType:'gas_central', model:'', gasLoad:0, note:'REFER TO HOT WATER SCHEMATICS'};
     curSvc().nodes.push(node); selectNode_(node.id); return;
   }
   const cx=snap(view.x+viewW()*0.4), cy=snap(Math.max(view.y+viewH()*0.5, levelY(state.building.groundIdx)+56));
@@ -1990,6 +2083,7 @@ function syncServiceUI(){
   document.documentElement.classList.toggle('svc-hw', hw); // hot-water sheet renders red (see :root.svc-hw)
   const show=(sel,on)=>{ const e=document.querySelector(sel); if(e) e.style.display=on?'':'none'; };
   show('[data-add="source"]', !hw); show('[data-add="plant"]', hw); show('#btn-hwsetup', hw);
+  show('[data-add="hwu"]', !hw); // the HWU is the cold sheet's view of the plant, so cold-only
   const sub=document.querySelector('.brand span'); if(sub) sub.textContent = hw ? 'Hot Water · Pipe Sizer' : 'Cold Water · Pipe Sizer';
 }
 function switchService(to){
