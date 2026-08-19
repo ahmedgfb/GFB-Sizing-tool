@@ -254,7 +254,16 @@
       <label>Top level<select class="field" id="r-top"></select></label>
     </div>
     <div class="setrow"><label>Dwellings per level<input class="field" id="r-dw" type="number" min="0" value="4"></label></div>
-    <div class="setrow"><label style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="r-conn" checked style="width:auto;margin:0"> Auto-connect to the nearest source / riser</label></div>
+    <div class="setrow">
+      <label>Connect
+        <select class="field" id="r-conn">
+          <option value="pick">Pick a point on the run…</option>
+          <option value="auto">Nearest riser (automatic)</option>
+          <option value="none">Don't connect yet</option>
+        </select>
+      </label>
+      <label>Connect at level<select class="field" id="r-conn-level"></select></label>
+    </div>
     <div class="start">
       <button class="tool ghost" id="r-cancel">Cancel</button>
       <button class="primary" id="r-add">Add riser →</button>
@@ -666,7 +675,7 @@ function pipePts(p){
 function sizePipes(){
   const res={}; curSvc().pipes.forEach(p=>res[p.id]={flow:null,dn:null,vel:null,over:false,unsized:true});
   riserInfo={};
-  curSvc().nodes.forEach(n=>{ if(n.type==='riser') riserInfo[n.id]={feed:null,exports:{}}; });
+  curSvc().nodes.forEach(n=>{ if(n.type==='riser') riserInfo[n.id]={feed:null,feedPipe:null,exports:{}}; });
   const sources=curSvc().nodes.filter(n=>n.type==='source'||n.type==='plant'); // hot-water plant feeds like a source
   const adj={}; curSvc().nodes.forEach(n=>adj[n.id]=[]);
   curSvc().pipes.forEach(p=>{
@@ -681,7 +690,8 @@ function sizePipes(){
     for(const {p,o,oAtt,uAtt} of adj[u]){ if(!seen.has(o)){
       seen.add(o); parent[o]=u; pPipe[o]=p; pAttU[o]=uAtt; q.push(o);
       const on=getNode(o);
-      if(on&&on.type==='riser') riserInfo[o].feed=clampLevel(on, oAtt.level);
+      // feedPipe is the BFS tree edge the riser is fed by — what "Reconnect feed" replaces
+      if(on&&on.type==='riser'){ riserInfo[o].feed=clampLevel(on, oAtt.level); riserInfo[o].feedPipe=p.id; }
     } } }
   const demand={}; curSvc().nodes.forEach(n=>demand[n.id]= n.type==='riser'?riserBaseFlow(n):0);
   for(let i=order.length-1;i>=0;i--){ const u=order[i]; if(parent[u]!=null){
@@ -706,8 +716,11 @@ function el(tag,attrs={},kids=[]){ const e=document.createElementNS(SVGNS,tag);
   for(const k in attrs) e.setAttribute(k,attrs[k]); kids.forEach(c=>e.appendChild(c)); return e; }
 function txt(x,y,s,attrs={}){ const t=el('text',Object.assign({x,y},attrs)); t.textContent=s; return t; }
 
-// white outline behind drawing text so gridlines never bleed through
-function haloed(a){ return Object.assign({stroke:'#f7f8fa','stroke-width':3.5,'paint-order':'stroke','stroke-linejoin':'round'},a); }
+// white outline behind drawing text so gridlines never bleed through.
+// pointer-events:none — every haloed label is decorative, and the halo makes each glyph a fat click
+// target. Without this, the Ø/flow callout just above a main swallows clicks meant for the pipe.
+function haloed(a){ return Object.assign({stroke:'#f7f8fa','stroke-width':3.5,'paint-order':'stroke',
+  'stroke-linejoin':'round','pointer-events':'none'},a); }
 
 // size of the meter branch serving a single level's own demand
 function levelBranch(n,i){
@@ -851,7 +864,9 @@ function render(){
     const d=pathFrom(pts);
     const g=el('g',{'data-pipe-id':p.id,style:'cursor:pointer'});
     g.appendChild(el('path',{d,fill:'none',stroke:color,'stroke-width':4,'stroke-linejoin':'miter'}));
-    g.appendChild(el('path',{d,fill:'none',stroke:'transparent','stroke-width':16})); // hit area
+    // hit area — divided by the zoom so it stays ~16 SCREEN px wide at any scale (the viewBox
+    // otherwise shrinks it to a few pixels when zoomed out, making pipes impossible to click)
+    g.appendChild(el('path',{d,fill:'none',stroke:'transparent','stroke-width':16/Math.max(view.scale,0.01)}));
     // endpoint dots where attached; open circles on free ends
     [[pts[0],p.a],[pts[pts.length-1],p.b]].forEach(([q,att])=>{
       if(att) g.appendChild(el('circle',{cx:q.x,cy:q.y,r:3.4,fill:color}));
@@ -885,6 +900,20 @@ function render(){
   }
   if(ui.hover && (ui.mode==='draw')){ // snap indicator
     board.appendChild(el('circle',{cx:ui.hover.x,cy:ui.hover.y,r:7,fill:'none',stroke:'var(--sel)','stroke-width':2}));
+  }
+  // ---- connect mode: show exactly where the tee will land ----
+  if(ui.mode==='connect' && ui.connect && ui.connect.snapQ){
+    const q=ui.connect.snapQ, n=getNode(ui.connect.riserId);
+    if(n){ // dashed preview of the main that will be created
+      const bp=attachPoint({node:n.id,level:clampLevel(n,ui.connect.level)});
+      const ry=Math.min(q.y,bp.y);
+      const prev=ui.connect.place ? [{x:q.x,y:q.y},{x:q.x,y:bp.y}]
+                                  : [{x:q.x,y:q.y},{x:q.x,y:ry},{x:bp.x,y:ry},{x:bp.x,y:bp.y}];
+      board.appendChild(el('path',{d:pathFrom(dedupe(prev)),fill:'none',stroke:'var(--sel)',
+        'stroke-width':3,'stroke-dasharray':'7 5','stroke-linejoin':'miter','pointer-events':'none'}));
+    }
+    board.appendChild(el('circle',{cx:q.x,cy:q.y,r:8,fill:'none',stroke:'var(--sel)','stroke-width':2.5,'pointer-events':'none'}));
+    board.appendChild(el('circle',{cx:q.x,cy:q.y,r:2.5,fill:'var(--sel)','pointer-events':'none'}));
   }
 
   // ---- nodes ----
@@ -923,7 +952,11 @@ function render(){
       // narrow full-height column so pipes can connect at ANY level, wide pad over the drawn extent
       const colTop=takeoffY(levelCount()-1)-24;
       g.appendChild(el('rect',{x:n.x-24,y:colTop,width:48,height:sheetBottomY()-colTop+40,fill:'transparent'}));
-      g.appendChild(el('rect',{x:n.x-70,y:yTop-32,width:140,height:Math.max(yBot-yTop+64,70),fill:'transparent'}));
+      // The wide pad makes the riser easy to SELECT (name, meters, callouts all count as the riser).
+      // Nodes paint after pipes, so it also covers any main within ±70px — which made teeing off a
+      // run next to a riser impossible. Only offer it in select mode; drawing wants precision.
+      if(ui.mode==='select')
+        g.appendChild(el('rect',{x:n.x-70,y:yTop-32,width:140,height:Math.max(yBot-yTop+64,70),fill:'transparent'}));
       // segments between served levels — Ø callouts on the opposite side to the branches
       const cAnchor = dir>0?'end':'start', cX = n.x - dir*10;
       segs.forEach(s=>{
@@ -990,8 +1023,10 @@ function render(){
     }
   });
 
-  // pipe callouts last, so node boxes never cover them
-  topLabels.forEach(t=>board.appendChild(t));
+  // pipe callouts last, so node boxes never cover them. They live directly on the board rather than
+  // inside their pipe's <g data-pipe-id>, so they must not take clicks — pipeUnder() would see the
+  // label, find no data-pipe-id ancestor, and report empty canvas.
+  topLabels.forEach(t=>{ t.setAttribute('pointer-events','none'); board.appendChild(t); });
 
   if(printBox) drawTitleBlock();
 }
@@ -1044,20 +1079,36 @@ function attachUnder(e, loc){
 }
 function pipeUnder(e){ const pe=e.target.closest('[data-pipe-id]'); return pe?getPipe(+pe.getAttribute('data-pipe-id')):null; }
 
+// where on segment a-b does loc land? grid-snapped along the run and clamped to the segment.
+// Shared by splitPipeAt and pipeNear so the point you see highlighted is the point you get.
+function closestOnSeg(a,b,loc){
+  if(Math.abs(a.y-b.y)<0.5) // horizontal
+    return {x:Math.max(Math.min(a.x,b.x),Math.min(Math.max(a.x,b.x),snap(loc.x))), y:a.y};
+  return {x:a.x, y:Math.max(Math.min(a.y,b.y),Math.min(Math.max(a.y,b.y),snap(loc.y)))};
+}
+// nearest pipe to a world point → {pipe,q,d} or null. Geometric, so unlike pipeUnder() it is not
+// hostage to paint order: a main running under a riser's hit pad is still found.
+function pipeNear(loc, tol, skipId){
+  let best=null;
+  curSvc().pipes.forEach(p=>{
+    if(skipId!=null && p.id===skipId) return;
+    const pts=pipePts(p); if(pts.length<2) return;
+    for(let i=0;i<pts.length-1;i++){
+      const q=closestOnSeg(pts[i],pts[i+1],loc), d=Math.hypot(q.x-loc.x,q.y-loc.y);
+      if(d<=tol && (!best||d<best.d)) best={pipe:p,q,d};
+    }
+  });
+  return best;
+}
+// click tolerance in world units — a constant ~18px on screen whatever the zoom
+function pickTol(){ return 18/Math.max(view.scale,0.01); }
+
 // split a pipe at the point nearest loc → returns the new tee node
 function splitPipeAt(p, loc){
   const pts=pipePts(p);
   let bi=0,bq=null,bd=Infinity;
   for(let i=0;i<pts.length-1;i++){
-    const a=pts[i],b=pts[i+1];
-    let q;
-    if(Math.abs(a.y-b.y)<0.5){ // horizontal
-      const x=Math.max(Math.min(a.x,b.x),Math.min(Math.max(a.x,b.x),snap(loc.x)));
-      q={x, y:a.y};
-    } else {
-      const y=Math.max(Math.min(a.y,b.y),Math.min(Math.max(a.y,b.y),snap(loc.y)));
-      q={x:a.x, y};
-    }
+    const q=closestOnSeg(pts[i],pts[i+1],loc);
     const d=Math.hypot(q.x-loc.x,q.y-loc.y);
     if(d<bd){ bd=d; bi=i; bq=q; }
   }
@@ -1071,6 +1122,23 @@ function splitPipeAt(p, loc){
   if(p1.pts.length>=2) curSvc().pipes.push(p1);
   if(p2.pts.length>=2) curSvc().pipes.push(p2);
   return tee;
+}
+// Split a run at loc and land both halves on `att` (typically a riser at a level) instead of on a
+// new tee. Used when the riser sits directly on the run: a tee there would need a zero-length feed
+// pipe, which sizes as "not connected" and draws as a stray dot.
+function splitPipeInto(p, loc, att){
+  const pts=pipePts(p);
+  let bi=0,bd=Infinity;
+  for(let i=0;i<pts.length-1;i++){
+    const q=closestOnSeg(pts[i],pts[i+1],loc), d=Math.hypot(q.x-loc.x,q.y-loc.y);
+    if(d<bd){ bd=d; bi=i; }
+  }
+  const jp=attachPoint(att);
+  const pts1=dedupe([...pts.slice(0,bi+1).map(q=>({...q})),{...jp}]);
+  const pts2=dedupe([{...jp},...pts.slice(bi+1).map(q=>({...q}))]);
+  curSvc().pipes=curSvc().pipes.filter(x=>x.id!==p.id);
+  if(pts1.length>=2) curSvc().pipes.push({id:nid(),pts:pts1,a:p.a,b:Object.assign({},att)});
+  if(pts2.length>=2) curSvc().pipes.push({id:nid(),pts:pts2,a:Object.assign({},att),b:p.b});
 }
 function dedupe(pts){
   const out=[pts[0]];
@@ -1090,9 +1158,22 @@ board.addEventListener('mousedown',e=>{
   if(e.button!==0) return;
   const loc=clientToSvg(e);
   if(ui.mode==='draw'){ drawClick(e,loc); return; }
+  if(ui.mode==='connect'){ connectClick(loc); return; }
   if(ui.mode==='fillet'){ filletClick(e); return; }
   const nodeEl=e.target.closest('[data-node-id]');
   const pipeEl=e.target.closest('[data-pipe-id]');
+  // A riser's hit pad is 140px wide and paints over the mains, so clicking a run beside a riser
+  // used to select the riser. Give the nearer of the two the click (same contest as pickTarget).
+  let divert=null;
+  if(nodeEl){
+    const hn=getNode(+nodeEl.getAttribute('data-node-id'));
+    const near=pipeNear(loc,pickTol());
+    if(hn && near){
+      const dNode = hn.type==='riser' ? Math.abs(loc.x-hn.x) : Math.hypot(loc.x-hn.x,loc.y-(hn.y||0));
+      if(near.d < dNode) divert=near.pipe.id;
+    }
+  }
+  if(divert!=null){ selectPipe_(divert); return; }
   if(nodeEl){
     const id=+nodeEl.getAttribute('data-node-id');
     const n=getNode(id);
@@ -1110,6 +1191,7 @@ window.addEventListener('mousemove',e=>{
     view.y=ui.pan.vy-(e.clientY-ui.pan.sy)/view.scale;
     render(); return;
   }
+  if(ui.mode==='connect'){ connectHover(clientToSvg(e)); return; }
   if(ui.mode==='draw'){
     const loc=clientToSvg(e);
     const hit=attachUnder(e,loc);
@@ -1184,9 +1266,25 @@ function routeTo(lp, pt){
   if(Math.abs(lp.x-pt.x)<0.5||Math.abs(lp.y-pt.y)<0.5) return [pt];
   return [{x:lp.x,y:pt.y}, pt];
 }
-function drawClick(e, loc){
+// What did this click mean — attach to a node, or tee off a pipe?
+// attachUnder() is DOM-based and a riser's hit column is 48px wide, so a main passing beside a riser
+// used to be unreachable. Resolve the contest geometrically: for a riser, "distance" is the
+// horizontal gap to its centreline (it can be attached at any level); compare that with the nearest
+// pipe and let the closer one win.
+function pickTarget(e, loc){
   const hit=attachUnder(e,loc);
-  const pl=(!hit)?pipeUnder(e):null;
+  const near=pipeNear(loc,pickTol());
+  if(hit && near){
+    const n=getNode(hit.att.node);
+    const dNode = n && n.type==='riser' ? Math.abs(loc.x-n.x)
+                                        : Math.hypot(loc.x-hit.pt.x, loc.y-hit.pt.y);
+    if(near.d < dNode) return {hit:null, pipe:near.pipe};
+  }
+  if(hit) return {hit, pipe:null};
+  return {hit:null, pipe: near? near.pipe : pipeUnder(e)};
+}
+function drawClick(e, loc){
+  const t=pickTarget(e,loc), hit=t.hit, pl=t.pipe;
   if(!ui.draft){
     // a draw spans several clicks, so hold the baseline until the gesture ends (commitDraw).
     // This also covers the tee splitPipeAt commits mid-draft — cancelling with Esc now takes it back.
@@ -1507,7 +1605,7 @@ function renderRiserPanel(n,body){
   const base=riserBaseFlow(n);
   if(!n.rl) n.rl=blankRl();
   const rl=n.rl, pr=riserPressure(n);
-  const info=riserInfo[n.id]||{feed:null,exports:{}};
+  const info=riserInfo[n.id]||{feed:null,feedPipe:null,exports:{}};
   const feedName= info.feed!=null? state.building.levels[info.feed] : 'not connected';
   wrap.innerHTML=`
     <div class="row">
@@ -1547,7 +1645,13 @@ function renderRiserPanel(n,body){
       <div><span class="k">Fed at</span><span class="v">${escapeHtml(feedName)}</span></div>
     </div>
     <p class="empty" style="margin-top:8px">Segments size away from the feed point. The riser spans from its lowest to highest level with demand — give a level dwellings/LU to extend it.</p>
-    <button class="tool" style="margin-top:10px;width:100%;justify-content:center" id="delr">🗑 Delete riser</button>`;
+    <div class="row" style="margin-top:10px">
+      <label>Feed at level
+        <select class="field" id="rfeedlvl">${state.building.levels.map((nm,i)=>`<option value="${i}" ${i===(info.feed!=null?info.feed:riserStartIdx(n))?'selected':''}>${escapeHtml(nm)}</option>`).join('')}</select>
+      </label>
+    </div>
+    <button class="tool" style="margin-top:8px;width:100%;justify-content:center" id="reconn">⇢ Reconnect feed — pick a point on a run</button>
+    <button class="tool" style="margin-top:8px;width:100%;justify-content:center" id="delr">🗑 Delete riser</button>`;
   body.appendChild(wrap);
   wrap.querySelector('#rname').addEventListener('input',e=>{ n.name=e.target.value; document.getElementById('p-title').textContent=n.name; render(); });
   wrap.querySelector('#rstart').addEventListener('change',e=>{
@@ -1565,6 +1669,19 @@ function renderRiserPanel(n,body){
   const matSel2=wrap.querySelector('#rmat'); matSel2.value=n.material||''; matSel2.addEventListener('change',e=>{ n.material=e.target.value; renderPanel(); render(); });
   wrap.querySelector('#rvel').addEventListener('input',e=>{ n.maxVelocity=e.target.value?parseFloat(e.target.value):null; renderPanel(); render(); });
   bindRlFields(wrap, n.rl);
+  // move the existing feed to a different level on this riser, without redrawing the pipe
+  wrap.querySelector('#rfeedlvl').addEventListener('change',e=>{
+    const lvl=parseInt(e.target.value)||0;
+    const fp=(riserInfo[n.id]||{}).feedPipe;
+    const p=fp!=null?getPipe(fp):null;
+    if(p) [p.a,p.b].forEach(att=>{ if(att&&att.node===n.id){ att.level=lvl; att.pin=true; } });
+    renderPanel(); render();
+  });
+  // re-run the feed from anywhere on the drawing — replaces the current feed pipe
+  wrap.querySelector('#reconn').addEventListener('click',()=>{
+    const lvl=parseInt(wrap.querySelector('#rfeedlvl').value);
+    beginConnect(n.id, isNaN(lvl)?riserStartIdx(n):lvl, false);
+  });
   wrap.querySelector('#delr').addEventListener('click',deleteSelected);
   renderLevelsEditor(n, wrap.querySelector('#levels'));
 }
@@ -1671,10 +1788,15 @@ document.querySelectorAll('[data-add]').forEach(btn=>btn.addEventListener('click
 
 // ---- new riser dialog ----
 function openRiserDlg(){
-  document.getElementById('r-name').value='CW RISER '+(allRisers().length+1);
+  document.getElementById('r-name').value=curDef().label+' RISER '+(allRisers().length+1);
   const opts=state.building.levels.map((nm,i)=>`<option value="${i}">${escapeHtml(nm)}</option>`).join('');
   const s=document.getElementById('r-start'); s.innerHTML=opts; s.value=String(state.building.groundIdx);
   const t=document.getElementById('r-top'); t.innerHTML=opts; t.value=String(levelCount()-1);
+  const cl=document.getElementById('r-conn-level'); cl.innerHTML=opts; cl.value=s.value;
+  s.onchange=()=>{ cl.value=s.value; }; // the feed follows "Starts at" until it is set by hand
+  // nothing to tee off on an empty sheet — offer auto (which will find the source) instead
+  const conn=document.getElementById('r-conn');
+  conn.value = curSvc().pipes.length ? 'pick' : 'auto';
   document.getElementById('riserdlg').classList.remove('hidden');
 }
 document.getElementById('r-cancel').addEventListener('click',()=>document.getElementById('riserdlg').classList.add('hidden'));
@@ -1685,17 +1807,26 @@ document.getElementById('r-add').addEventListener('click',()=>{
   const dw=parseFloat(document.getElementById('r-dw').value)||0;
   const xs=allRisers().map(r=>r.x);
   const node={id:nid(),type:'riser',x:snap(xs.length?Math.max(...xs)+340:420),
-    name:document.getElementById('r-name').value||('CW RISER '+(allRisers().length+1)),
+    name:document.getElementById('r-name').value||(curDef().label+' RISER '+(allRisers().length+1)),
     start:s, data:state.building.levels.map(()=>blankLevel()), rl:blankRl()};
   for(let i=s;i<=t;i++) node.data[i].dwellings=dw;
   curSvc().nodes.push(node);
-  if(document.getElementById('r-conn').checked) autoConnectRiser(node);
+  const how=document.getElementById('r-conn').value;
+  const clvl=parseInt(document.getElementById('r-conn-level').value); // NaN-safe: clampLevel handles it
   document.getElementById('riserdlg').classList.add('hidden');
+  if(how==='auto') autoConnectRiser(node);
   selectNode_(node.id);
+  // "pick" hands over to connect mode: the riser lands where the tee is clicked, so it drops
+  // straight off the run instead of being parked at the far right.
+  if(how==='pick' && curSvc().pipes.length) beginConnect(node.id, isNaN(clvl)?s:clvl, true);
 });
 // run a main from the nearest source / plant / riser into this riser's start level
 function autoConnectRiser(n){
-  const cands=curSvc().nodes.filter(x=>x.id!==n.id&&(x.type==='source'||x.type==='plant'||x.type==='riser'));
+  const all=curSvc().nodes.filter(x=>x.id!==n.id&&(x.type==='source'||x.type==='plant'||x.type==='riser'));
+  // Prefer a riser or plant: mains chain riser-to-riser in the ceiling, and the source sits
+  // underground. Scored together, a distant source could out-rank an adjacent riser and drag a main
+  // through the soil hatch across the whole sheet. Fall back to the source only for the first riser.
+  const cands=all.filter(x=>x.type!=='source').length? all.filter(x=>x.type!=='source') : all;
   if(!cands.length) return;
   const ref=attachPoint({node:n.id,level:riserStartIdx(n)});
   let best=null,bd=Infinity;
@@ -1716,6 +1847,73 @@ function autoConnectRiser(n){
     pts= Math.abs(best.q.y-bp.y)<0.5 ? [{...best.q},{...bp}] : [{...best.q},{x:bp.x,y:best.q.y},{...bp}];
   }
   curSvc().pipes.push({id:nid(),pts:dedupe(pts),a:best.att,b:endAtt});
+}
+
+// ====================== connect mode — tee a riser off any point on a run ======================
+// A one-shot pick: hover snaps to the nearest pipe, the click splits it into a tee and runs a main
+// into the riser. Used both by the new-riser dialog and by "⇢ Reconnect feed" on the riser panel.
+let connectSnap=null;
+function beginConnect(riserId, level, place){
+  connectSnap=docSnap();          // whole gesture is one undo step (see connectClick / cancelConnect)
+  setMode('connect');             // clears any previous pick
+  ui.connect={riserId, level, place:!!place, snapQ:null, pipeId:null};
+  updateHint(); render();
+}
+function cancelConnect(){ ui.connect=null; connectSnap=null; }
+// keep a new riser clear of the ones already on the sheet
+function freeRiserX(x, selfId){
+  const others=allRisers().filter(r=>r.id!==selfId).map(r=>r.x);
+  const clear=v=>!others.some(o=>Math.abs(o-v)<120);
+  if(clear(x)) return snap(x);
+  for(let k=1;k<=30;k++){
+    if(clear(x+k*GRID)) return snap(x+k*GRID);
+    if(clear(x-k*GRID)) return snap(x-k*GRID);
+  }
+  return snap(x);
+}
+function connectHover(loc){
+  if(!ui.connect) return;
+  const near=pipeNear(loc,pickTol());
+  const q=near?near.q:null, was=ui.connect.snapQ;
+  const moved = (!!q)!==(!!was) || (q&&was&&(q.x!==was.x||q.y!==was.y));
+  ui.connect.snapQ=q; ui.connect.pipeId=near?near.pipe.id:null;
+  if(moved) render();
+}
+function connectClick(loc){
+  const c=ui.connect; if(!c) return;
+  const n=getNode(c.riserId);
+  if(!n){ setMode('select'); return; }
+  const near=pipeNear(loc,pickTol());
+  if(!near) return;               // clicked empty space — stay in the mode and let them try again
+  // Reconnect: drop the pipe currently feeding this riser so it never ends up double-fed
+  // (a second feed becomes a non-tree edge and silently renders grey/unsized).
+  const info=riserInfo[n.id];
+  const oldFeed = info && info.feedPipe!=null ? info.feedPipe : null;
+  const target = near.pipe.id===oldFeed ? null : near.pipe;   // teeing off its own feed: nothing to do
+  if(target===null){ setMode('select'); cancelConnect(); render(); return; }
+  if(oldFeed!=null) curSvc().pipes=curSvc().pipes.filter(p=>p.id!==oldFeed);
+  if(c.place) n.x=freeRiserX(snap(near.q.x), n.id);
+  const att={node:n.id, level:clampLevel(n,c.level)};
+  const bp=attachPoint(att);
+  // Riser landed right on the run (the usual case when placing it at the click): join the two
+  // halves straight onto it — a tee plus a zero-length feed would render as a stray dot and size
+  // as unconnected. Otherwise drop a tee and run a main across in the ceiling.
+  if(Math.abs(bp.x-near.q.x)<0.5 && Math.abs(bp.y-near.q.y)<0.5){
+    splitPipeInto(target,loc,att);
+  } else {
+    const tee=splitPipeAt(target,loc);
+    const ry=Math.min(tee.y,bp.y);   // same ceiling idiom as autoConnectRiser
+    const pts=dedupe([{x:tee.x,y:tee.y},{x:tee.x,y:ry},{x:bp.x,y:ry},{...bp}]);
+    if(pts.length>=2) curSvc().pipes.push({id:nid(),pts,a:{node:tee.id},b:att});
+    else { // degenerate route — fold the tee away and attach the halves to the riser instead
+      curSvc().nodes=curSvc().nodes.filter(x=>x.id!==tee.id);
+      curSvc().pipes.forEach(p=>{ [p.a,p.b].forEach(a=>{ if(a&&a.node===tee.id){ a.node=att.node; a.level=att.level; } }); });
+    }
+  }
+  const snapBefore=connectSnap; connectSnap=null;
+  setMode('select');               // clears ui.connect
+  selectNode_(n.id);
+  commitSnap(snapBefore,'connect riser');
 }
 // build the hot-water sheet from the cold-water risers: a roof plant + mirrored HW risers,
 // each fed from the plant at its top (roof) level so riser segments size downward from the plant.
@@ -1754,6 +1952,7 @@ function setupHotWaterFromCW(auto){
 }
 function setMode(m){
   commitDraw(); // leaving draw mode abandons any draft — keep whatever it already committed undoable
+  if(m!=='connect') cancelConnect(); // any mode change abandons a pending connect pick
   ui.mode=m; ui.draft=null; ui.hover=null; ui.filletFirst=null;
   document.getElementById('mode-select').classList.toggle('active',m==='select');
   document.getElementById('mode-draw').classList.toggle('active',m==='draw');
@@ -1808,6 +2007,10 @@ function updateHint(){
   if(ui.mode==='draw'){
     h.textContent = ui.draft ? 'Click waypoints · click a node/riser/pipe to connect · Enter = end open · Esc = cancel'
                              : 'Draw pipe — click a start: source, riser (any level), tee, a pipe (to T off), or empty grid';
+    h.style.display='block';
+  } else if(ui.mode==='connect'){
+    const n=ui.connect?getNode(ui.connect.riserId):null;
+    h.textContent = 'Connect '+((n&&n.name)||'riser')+' — click any point on a pipe run to tee off there · Esc = cancel';
     h.style.display='block';
   } else if(ui.mode==='fillet'){
     h.textContent = ui.filletFirst!=null ? 'Fillet — click the second pipe' : 'Fillet — click the first pipe';
