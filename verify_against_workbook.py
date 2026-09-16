@@ -2,9 +2,13 @@
 against GFB's pipe-sizing workbook.
 
 The tool hardcodes the workbook's tables (PSFR curve, pipe ID/DN tables, hot-water
-per-dwelling demand) so it can run as a single self-contained HTML file. That data will
-silently drift the next time the workbook is revised - this script re-runs the whole
-comparison so drift shows up immediately.
+per-dwelling demand, and the AS 5601 gas capacity grids + diversity curve) so it can run as
+a single self-contained HTML file. That data will silently drift the next time the workbook
+is revised - this script re-runs the whole comparison so drift shows up immediately.
+
+Sheets and table blocks are located by NAME and by their own headers, never by position:
+the workbook has already gained a sheet and shifted rows once, which silently pointed the
+positional version of this script at the wrong data.
 
 Usage:
     py verify_against_workbook.py ["path\\to\\workbook.xlsx"] ["path\\to\\tool.html"]
@@ -27,15 +31,15 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+RELS_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+DOC_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 
-# Sheet file indices are stable across both revisions of the workbook.
-SHEETS = {
-    "FRONT PAGE": "xl/worksheets/sheet1.xml",
-    "CW CALCS": "xl/worksheets/sheet3.xml",
-    "HW CALCS": "xl/worksheets/sheet4.xml",
-    "COLD WATER DATA": "xl/worksheets/sheet7.xml",
-    "HOT WATER DATA": "xl/worksheets/sheet8.xml",
-}
+# Sheets are resolved by NAME, via workbook.xml and its rels.
+#
+# This used to be a hardcoded {name: "xl/worksheets/sheetN.xml"} map, on the assumption that the
+# file indices were stable. They are not: the master has since gained an "RCW CALCS" sheet, which
+# shifted every index from 4 upwards and had this script silently reading GAS DATA as COLD WATER
+# DATA. Resolving by name survives any future insertion.
 
 TOL = 1e-9
 CAP_TOL = 1e-6
@@ -50,6 +54,7 @@ class Workbook:
         self.path = path
         self._zip = zipfile.ZipFile(path)
         self._strings = self._read_shared_strings()
+        self._parts = self._read_sheet_parts()
         self._sheets = {}
 
     def _read_shared_strings(self):
@@ -59,10 +64,27 @@ class Workbook:
         return ["".join(t.text or "" for t in si.iter(NS + "t"))
                 for si in root.findall(NS + "si")]
 
+    def _read_sheet_parts(self):
+        """{sheet name: zip part} straight from workbook.xml and its relationships."""
+        rels = ET.fromstring(self._zip.read("xl/_rels/workbook.xml.rels"))
+        targets = {r.get("Id"): r.get("Target")
+                   for r in rels.iter(RELS_NS + "Relationship")}
+        parts = {}
+        for sheet in ET.fromstring(self._zip.read("xl/workbook.xml")).iter(NS + "sheet"):
+            target = targets.get(sheet.get(DOC_REL), "")
+            parts[sheet.get("name")] = "xl/" + target.lstrip("/")
+        return parts
+
+    def sheet_names(self):
+        return list(self._parts)
+
     def sheet(self, name):
         """{cell_ref: (value, formula_or_None)} for one sheet."""
         if name not in self._sheets:
-            root = ET.fromstring(self._zip.read(SHEETS[name]))
+            if name not in self._parts:
+                raise SystemExit("workbook has no sheet named %r (it has: %s)"
+                                 % (name, ", ".join(self._parts)))
+            root = ET.fromstring(self._zip.read(self._parts[name]))
             cells = {}
             for row in root.iter(NS + "row"):
                 for c in row:
@@ -119,6 +141,9 @@ def read_tool_data(html_path):
         "PSFR": grab("PSFR", "["),
         "PIPE_TABLES": grab("PIPE_TABLES", "{"),
         "HW_PER_DWELLING": grab("HW_PER_DWELLING", "["),
+        "GAS_TABLES": grab("GAS_TABLES", "{"),
+        "GAS_DIVERSITY": grab("GAS_DIVERSITY", "["),
+        "GAS_SIZE_SELECTOR": grab("GAS_SIZE_SELECTOR", "["),
         "_js": {name: extract_js_function(html, name) for name in MIRRORED_JS},
     }
 
@@ -157,7 +182,141 @@ MIRRORED_JS = {
         "if(flowLs==null||flowLs<=0) return table[0]; "
         "for(const p of table){ if(maxFlowForVel(p.ID_mm,vmax)>=flowLs) return p; } "
         "return null; }",
+    "gasDiversity":
+        "function gasDiversity(dwellings){ const n=+dwellings||0; "
+        "if(n<GAS_DIVERSITY[0][0]) return null; let f=GAS_DIVERSITY[0][1]; "
+        "for(const [count,factor] of GAS_DIVERSITY){ if(count<=n) f=factor; else break; } "
+        "return f; }",
+    "gasCapacity":
+        "function gasCapacity(tableKey, dn, indexLength){ const t=gasTable(tableKey); "
+        "const di=t.dn.indexOf(+dn), li=t.lengths.indexOf(+indexLength); "
+        "if(di<0||li<0) return null; const v=t.cap[di][li]; return v==null? null : v; }",
+    "selectGasPipe":
+        "function selectGasPipe(mjhr, tableKey, indexLength){ const t=gasTable(tableKey); "
+        "const q=+mjhr||0; for(const dn of t.dn){ "
+        "const cap=gasCapacity(tableKey,dn,indexLength); if(cap!=null && cap>=q) return {DN:dn, cap}; } "
+        "return null; }",
+    "gasAdjusted":
+        "function gasAdjusted(dwellings, perDwelling, diversityOn, plantLoad){ "
+        "const dw=+dwellings||0, per=+perDwelling||0, plant=+plantLoad||0; "
+        "if(dw<=0) return plant; const f = diversityOn ? gasDiversity(dw) : 1; "
+        "return dw*per*(f==null?1:f) + plant; }",
+    "gasTolerance":
+        "function gasTolerance(pct){ const p=+pct; "
+        "return 1 + ((isNaN(p)? GAS_DEFAULTS.tolerancePct : p)/100); }",
 }
+
+
+# ------------------------------------------------------------------------- gas: the mirrors
+#
+# GAS DATA holds four AS 5601-2022 capacity grids. Each is anchored by a "DN" label in column AS
+# on the header row that carries the index lengths, so they are located rather than hardcoded.
+GAS_DATA_SHEET = "GAS DATA"
+GAS_LENGTH_COLS = ["I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W",
+                   "X", "Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ",
+                   "AK", "AL", "AM", "AN", "AO", "AP", "AQ", "AR"]
+# tool key -> the workbook's own name for the table, for the failure messages
+GAS_TABLE_NAMES = {"f12": "F.12", "f13": "F.13", "f24": "F.24", "f25": "F.25"}
+
+
+def gas_header_rows(wb):
+    """Rows in GAS DATA that carry a capacity table's index-length header, in sheet order.
+
+    Anchored on the table titles in column I ("TABLE F.12 - 2022", "Table F.24", ...) rather than
+    on the "DN" label in column AS: F.13's block has no such label, and titles are what a reader
+    would look for anyway.
+    """
+    titles = []
+    for ref, (value, _) in wb.sheet(GAS_DATA_SHEET).items():
+        m = re.fullmatch(r"I(\d+)", ref)
+        if m and isinstance(value, str) and re.match(r"\s*table\s+f\.?\d", value, re.I):
+            titles.append(int(m.group(1)))
+    rows = []
+    for title_row in sorted(titles):
+        # the header is the first row below the title whose column I holds the first index length
+        for row in range(title_row + 1, title_row + 12):
+            if wb.number(GAS_DATA_SHEET, "I%d" % row) == 2:
+                rows.append(row)
+                break
+    return rows
+
+
+def read_gas_table(wb, header_row):
+    """(lengths, [(dn, [capacity per length])]) for the table under one header row.
+
+    The DN for each row is taken from column AS where it is labelled, and the rows run until that
+    column runs out.
+    """
+    lengths = [wb.number(GAS_DATA_SHEET, "%s%d" % (col, header_row)) for col in GAS_LENGTH_COLS]
+    rows = []
+    row = header_row + 1
+    while wb.number(GAS_DATA_SHEET, "AS%d" % row) is not None:
+        dn = int(wb.number(GAS_DATA_SHEET, "AS%d" % row))
+        rows.append((dn, [wb.number(GAS_DATA_SHEET, "%s%d" % (col, row))
+                          for col in GAS_LENGTH_COLS]))
+        row += 1
+    return lengths, rows
+
+
+def gas_table_anomalies(dns, lengths, cap):
+    """Cells that break the physics: capacity must fall as the run lengthens and rise as the
+    pipe grows. This is what caught F.12 DN65 @ 4 m = 137776 in GFB's own template."""
+    bad = []
+    for r, row in enumerate(cap):
+        for i in range(len(row) - 1):
+            a, b = row[i], row[i + 1]
+            if a is not None and b is not None and b > a:
+                bad.append("DN%s rises with length: %sm=%s -> %sm=%s"
+                           % (dns[r], lengths[i], a, lengths[i + 1], b))
+    for r in range(len(cap) - 1):
+        for i in range(len(lengths)):
+            a, b = cap[r][i], cap[r + 1][i]
+            if a is not None and b is not None and b < a:
+                bad.append("capacity falls with size at %sm: DN%s=%s -> DN%s=%s"
+                           % (lengths[i], dns[r], a, dns[r + 1], b))
+    return bad
+
+
+# The one workbook cell this script knowingly refuses to trust. Present in every copy checked:
+# the master, all six Ellen Street "V5" sheets and the Resizing copy - so it is a defect in GFB's
+# template, not a corrupted file. The tool carries it as null so a lookup landing there reports
+# "not tabulated" instead of a wrong size.
+GAS_KNOWN_BAD = [("f12", 65, 4)]
+
+
+def gas_diversity_py(dwellings, curve):
+    """Mirror of gasDiversity(): VLOOKUP(...,TRUE) - the largest tabulated count <= n."""
+    n = dwellings or 0
+    if n < curve[0][0]:
+        return None
+    factor = curve[0][1]
+    for count, value in curve:
+        if count <= n:
+            factor = value
+        else:
+            break
+    return factor
+
+
+def select_gas_pipe_py(mjhr, table, index_length):
+    """Mirror of selectGasPipe(): smallest DN whose tabulated capacity covers the demand."""
+    try:
+        li = table["lengths"].index(index_length)
+    except ValueError:
+        return None
+    for di, dn in enumerate(table["dn"]):
+        cap = table["cap"][di][li]
+        if cap is not None and cap >= mjhr:
+            return dn
+    return None
+
+
+def gas_adjusted_py(dwellings, per_dwelling, diversity_on, plant_load, curve):
+    """Mirror of gasAdjusted() / GAS CALCS column G."""
+    if dwellings <= 0:
+        return plant_load
+    factor = gas_diversity_py(dwellings, curve) if diversity_on else 1
+    return dwellings * per_dwelling * (1 if factor is None else factor) + plant_load
 
 
 def capacity(id_mm, vmax):
@@ -257,8 +416,17 @@ def check_pipe_tables(wb, tool, report):
     for sheet, material, id_col, dn_col in layouts:
         table = tool["PIPE_TABLES"][material]
         problems = []
+        # Anchor on the block's own "I.D." header rather than assuming it starts at row 5 -
+        # COLD WATER DATA's first block sits one row higher than HOT WATER DATA's, and a hardcoded
+        # row 5 read the whole table off by one. check_capacity_bands already works this way.
+        headers = block_header_rows(wb, sheet, id_col)
+        if not headers:
+            report.check("%s!%s ID/DN" % (sheet, id_col),
+                         ["no 'I.D.' header found in column %s" % id_col])
+            continue
+        first_row = headers[0] + 1
         for i, pipe in enumerate(table):
-            row = 5 + i
+            row = first_row + i
             book_id = wb.number(sheet, "%s%d" % (id_col, row))
             book_dn = wb.number(sheet, "%s%d" % (dn_col, row))
             if book_id is None or book_dn is None:
@@ -268,9 +436,9 @@ def check_pipe_tables(wb, tool, report):
                     problems.append("row %d: workbook I.D. %s, tool %s" % (row, book_id, pipe["ID_mm"]))
                 if abs(book_dn - pipe["DN"]) > TOL:
                     problems.append("row %d: workbook DN %s, tool %s" % (row, book_dn, pipe["DN"]))
-        label = "%s ID/DN, %s!%s5:%s14" % (
+        label = "%s ID/DN, %s!%s%d:%s%d" % (
             "Stainless" if material == "stainless_steel" else "Copper Type B",
-            sheet, id_col, dn_col)
+            sheet, id_col, first_row, dn_col, first_row + len(table) - 1)
         report.check(label, problems)
 
 
@@ -405,6 +573,171 @@ def check_js_mirror(tool, report):
     report.check("JS sizing functions mirrored by this script", problems, detail_limit=9)
 
 
+def check_gas_tables(wb, tool, report):
+    """8. The four AS 5601-2022 capacity grids, cell for cell against GAS DATA."""
+    headers = gas_header_rows(wb)
+    tool_tables = tool["GAS_TABLES"]
+    order = ["f12", "f13", "f24", "f25"]
+    problems = []
+    if len(headers) != len(order):
+        problems.append("expected %d 'DN' header rows in GAS DATA!AS, found %d (%s)"
+                        % (len(order), len(headers), headers))
+        report.check("Gas capacity tables, GAS DATA", problems)
+        return
+
+    for key, header in zip(order, headers):
+        name = GAS_TABLE_NAMES[key]
+        book_lengths, book_rows = read_gas_table(wb, header)
+        table = tool_tables.get(key)
+        if table is None:
+            problems.append("%s: tool has no GAS_TABLES.%s" % (name, key))
+            continue
+        if [x for x in book_lengths if x is not None] != [x for x in table["lengths"] if x is not None]:
+            problems.append("%s: index lengths differ (workbook %s, tool %s)"
+                            % (name, book_lengths, table["lengths"]))
+            continue
+        if [dn for dn, _ in book_rows] != table["dn"]:
+            problems.append("%s: DN list differs (workbook %s, tool %s)"
+                            % (name, [dn for dn, _ in book_rows], table["dn"]))
+            continue
+        for di, (dn, book_caps) in enumerate(book_rows):
+            for li, book_cap in enumerate(book_caps):
+                tool_cap = table["cap"][di][li]
+                length = book_lengths[li]
+                if (key, dn, length) in GAS_KNOWN_BAD:
+                    if tool_cap is not None:
+                        problems.append("%s DN%s @ %sm: known-bad workbook cell (%s) must be "
+                                        "carried as null, tool has %s" % (name, dn, length, book_cap, tool_cap))
+                    continue
+                if book_cap is None and tool_cap is None:
+                    continue
+                if book_cap is None or tool_cap is None or abs(book_cap - tool_cap) > TOL:
+                    problems.append("%s DN%s @ %sm: workbook %s, tool %s"
+                                    % (name, dn, length, book_cap, tool_cap))
+    cells = sum(len(t["dn"]) * len(t["lengths"]) for t in tool_tables.values())
+    report.check("Gas capacity tables, GAS DATA (4 tables, %d cells)" % cells, problems)
+
+
+def check_gas_diversity(wb, tool, report):
+    """9. Diversity factor by dwelling count, GAS DATA!F9:G88."""
+    curve = tool["GAS_DIVERSITY"]
+    problems = []
+    book = []
+    for row in range(9, 89):
+        count = wb.number(GAS_DATA_SHEET, "F%d" % row)
+        factor = wb.number(GAS_DATA_SHEET, "G%d" % row)
+        if count is None or factor is None:
+            break
+        book.append((int(count), factor))
+    if len(book) != len(curve):
+        problems.append("row count: workbook %d, tool %d" % (len(book), len(curve)))
+    else:
+        for (count, factor), entry in zip(book, curve):
+            if count != entry[0] or abs(factor - entry[1]) > TOL:
+                problems.append("%d dwellings: workbook %s, tool %s -> %s"
+                                % (count, factor, entry[0], entry[1]))
+    report.check("Gas diversity curve, GAS DATA!F9:G88 (%d rows)" % len(book), problems)
+
+
+def check_gas_table_sanity(wb, tool, report):
+    """10. The capacity grids must be physically monotonic.
+
+    This is the gas analogue of the MAX FLOW check: it catches a mistyped table cell, which is a
+    defect the cell-for-cell comparison above cannot see (it would agree with the workbook).
+    """
+    problems = []
+    for key, table in tool["GAS_TABLES"].items():
+        bad = gas_table_anomalies(table["dn"], table["lengths"], table["cap"])
+        problems.extend("%s: %s" % (GAS_TABLE_NAMES.get(key, key), b) for b in bad)
+    report.check("Gas tables are monotonic (mistyped-cell guard)", problems)
+
+
+def check_gas_selection_sweep(wb, tool, report):
+    """11. selectGasPipe over every table x every tabulated index length."""
+    problems = []
+    checked = 0
+    for key, table in tool["GAS_TABLES"].items():
+        name = GAS_TABLE_NAMES.get(key, key)
+        for li, length in enumerate(table["lengths"]):
+            caps = [table["cap"][di][li] for di in range(len(table["dn"]))]
+            live = [(table["dn"][di], c) for di, c in enumerate(caps) if c is not None]
+            if not live:
+                continue
+            for dn, cap in live:
+                # just inside this size, and a hair over it
+                for demand, expect in ((cap, dn), (cap * (1 - 1e-9), dn)):
+                    got = select_gas_pipe_py(demand, table, length)
+                    checked += 1
+                    if got != expect:
+                        problems.append("%s @ %sm, %.4f MJ/h: expected DN%s, got DN%s"
+                                        % (name, length, demand, expect, got))
+                over = cap * (1 + 1e-6)
+                bigger = [d for d, c in live if c >= over]
+                got = select_gas_pipe_py(over, table, length)
+                checked += 1
+                expect = bigger[0] if bigger else None
+                if got != expect:
+                    problems.append("%s @ %sm, just over DN%s: expected %s, got %s"
+                                    % (name, length, dn, expect, got))
+            checked += 1
+            if select_gas_pipe_py(live[-1][1] * 10, table, length) is not None:
+                problems.append("%s @ %sm: demand past the table top should be unsized" % (name, length))
+    report.check("Gas selection sweep (%d lookups)" % checked, problems)
+
+
+def check_gas_calcs(wb, tool, report):
+    """12. Reproduce the published sizes on GAS CALCS, column by column.
+
+    The riser blocks carry their own inputs, so the sheet's own numbers drive the mirror: this
+    reads the workbook's dwellings, demand/dwelling, plant loads, index length and table choice,
+    recomputes columns F/G/H in Python, and compares against the cached cell values.
+    """
+    problems = []
+    rows_checked = 0
+    front = "FRONT PAGE"
+    per_dwelling = wb.number("GAS CALCS", "D4")
+    index_length = wb.number("GAS CALCS", "L3")
+    table_choice = wb.value(front, "F14")
+    diversity_on = str(wb.value(front, "F15")).upper() == "ON"
+    tolerance_pct = wb.number(front, "B15")
+    tolerance = 1.1 if tolerance_pct is None else 1 + tolerance_pct / 100.0
+
+    key = {"F12-2.75kPa": "f12", "F13-5kPa": "f13",
+           "F24 - 2.75kPa (STEEL)": "f24", "F25 - 5kPa (STEEL)": "f25"}.get(str(table_choice))
+    table = tool["GAS_TABLES"].get(key) if key else None
+    if table is None or per_dwelling is None or index_length is None:
+        report.check("GAS CALCS riser 1 (column F/G/H)",
+                     ["cannot read the sheet's gas inputs: table=%r, MJ/hr=%r, index length=%r"
+                      % (table_choice, per_dwelling, index_length)])
+        return
+
+    curve = tool["GAS_DIVERSITY"]
+    plant_below = {}
+    running = 0.0
+    for row in range(65, 4, -1):  # column J, summed from the row downwards (J_row:J$65)
+        running += wb.number("GAS CALCS", "J%d" % row) or 0.0
+        plant_below[row] = running
+
+    for row in range(5, 66):
+        dwellings = wb.number("GAS CALCS", "C%d" % row)
+        book_g = wb.number("GAS CALCS", "G%d" % row)
+        book_h = wb.value("GAS CALCS", "H%d" % row)
+        if dwellings is None or book_g is None:
+            continue
+        mine_g = gas_adjusted_py(dwellings, per_dwelling, diversity_on, plant_below[row], curve)
+        if abs(mine_g - book_g) > 1e-6:
+            problems.append("G%d: workbook %s, mirror %s (%s dwellings)"
+                            % (row, book_g, mine_g, dwellings))
+        if book_h not in (None, "-", ""):
+            mine_h = select_gas_pipe_py(book_g * tolerance, table, index_length)
+            if mine_h is None or abs(float(book_h) - mine_h) > TOL:
+                problems.append("H%d: workbook DN%s, mirror DN%s (%s MJ/hr x %.2f)"
+                                % (row, book_h, mine_h, book_g, tolerance))
+        rows_checked += 1
+    report.check("GAS CALCS riser 1, columns G + H (%d rows, %s @ %sm)"
+                 % (rows_checked, GAS_TABLE_NAMES.get(key, key), index_length), problems)
+
+
 # ----------------------------------------------------------------------------------- notes
 
 def print_notes(wb):
@@ -435,6 +768,21 @@ def print_notes(wb):
     print("       %s" % "  ".join(pairs))
     print("     The workbook's FRONT PAGE displays the DN column; the tool's diameter callouts")
     print("     keep the raw stainless size (decided 2026-07-31).")
+
+    print("  3. Gas table F.12, DN65 at an index length of 4 m.")
+    for key, dn, length in GAS_KNOWN_BAD:
+        header = gas_header_rows(wb)[["f12", "f13", "f24", "f25"].index(key)]
+        lengths, rows = read_gas_table(wb, header)
+        caps = dict(rows)[dn]
+        around = [(lengths[i], caps[i]) for i in range(3)]
+        print("     Workbook %s reads %s" % (GAS_TABLE_NAMES[key],
+              "  ".join("%sm=%s" % (L, c) for L, c in around)))
+    print("     The 4 m cell is impossible - 12x its neighbours, and above DN80 at the same")
+    print("     length. It is present in every copy checked (the master, all six Ellen Street")
+    print("     'V5' sheets and the Resizing copy), so it is a defect in GFB's template rather")
+    print("     than a corrupted file. The tool carries that one cell as null, so a lookup")
+    print("     landing on it reports 'not tabulated' instead of a wrong size. Only an index")
+    print("     length of 4 m is affected. Worth correcting in the template from the standard.")
 
 
 # ------------------------------------------------------------------------------------ main
@@ -478,6 +826,11 @@ def main(argv):
     check_capacity_bands(wb, report)
     check_selection_sweep(wb, tool, report)
     check_demand_formulas(wb, report)
+    check_gas_tables(wb, tool, report)
+    check_gas_diversity(wb, tool, report)
+    check_gas_table_sanity(wb, tool, report)
+    check_gas_selection_sweep(wb, tool, report)
+    check_gas_calcs(wb, tool, report)
     check_js_mirror(tool, report)
 
     print_notes(wb)

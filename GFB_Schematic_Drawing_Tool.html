@@ -17,6 +17,7 @@
     --sans:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
   }
   :root.svc-hw{ --pipe:#dd2222; --pipe-2:#a81b1b; --warn:#7d0d14; } /* hot-water sheet: flow = red, over/alert = maroon */
+  :root.svc-gas{ --pipe:#d98200; --pipe-2:#a35f00; --warn:#b3261e; --meter:#8a5a18; } /* gas sheet: the drawing convention's yellow-ochre */
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;font-family:var(--sans);color:var(--ink);background:var(--rail);overflow:hidden}
   #app{display:flex;flex-direction:column;height:100vh}
@@ -64,6 +65,7 @@
   .levels{margin-top:6px;border:1px solid var(--rail-line);border-radius:8px;overflow:hidden}
   .lvl-head,.lvl-row{display:grid;grid-template-columns:1.3fr .8fr .8fr;gap:0}
   .lvl-head.b,.lvl-row.b{grid-template-columns:1fr 26px 26px}
+  .lvl-head.gas,.lvl-row.gas{grid-template-columns:1.3fr .8fr 1fr} /* gas: dwellings + plant load MJ/hr */
   .lvl-head>div{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);
     padding:7px 8px;background:var(--rail-2);border-bottom:1px solid var(--rail-line)}
   .lvl-row>*{border-bottom:1px solid var(--rail-line)}
@@ -143,6 +145,7 @@
       <span class="toollabel">Sheet</span>
       <button class="tool active" data-svc="cw">Cold</button>
       <button class="tool" data-svc="hw">Hot</button>
+      <button class="tool" data-svc="gas">Gas</button>
     </div>
     <div class="sep"></div>
     <div class="toolgroup">
@@ -164,7 +167,7 @@
       <button class="tool ghost" id="btn-fit" title="Zoom extents (Z). Wheel = zoom, middle- or right-drag = pan">⛶ Fit <span class="kbd">Z</span></button>
     </div>
     <div class="sep"></div>
-    <div class="toolgroup">
+    <div class="toolgroup" id="grp-water">
       <span class="toollabel">Main</span>
       <select class="field" id="net-material">
         <option value="copper_type_b">Copper Type B</option>
@@ -174,10 +177,21 @@
       <span class="toollabel">m/s</span>
       <button class="tool ghost" id="btn-pressure" title="Show static pressure, PRV flags and pump duty on the drawing">◱ Pressure</button>
     </div>
+    <!-- gas sheet equivalents of the Main group: the FRONT PAGE gas inputs, sheet-wide -->
+    <div class="toolgroup" id="grp-gas" style="display:none">
+      <span class="toollabel">Table</span>
+      <select class="field" id="gas-table" title="AS 5601-2022 capacity table"></select>
+      <span class="toollabel">Index</span>
+      <select class="field" id="gas-index" style="width:76px" title="Index length (m) — the tables are only tabulated at these lengths"></select>
+      <span class="toollabel">MJ/hr ea.</span>
+      <input class="field" id="gas-perdw" type="number" step="1" min="0" style="width:70px" title="Demand per dwelling (MJ/hr)">
+      <button class="tool ghost" id="btn-gas-div" title="Apply the diversity factor from the workbook's dwelling curve">⚖ Diversity</button>
+    </div>
     <div class="spacer"></div>
     <div class="toolgroup">
       <button class="tool ghost" id="btn-setup">▤ Job setup</button>
       <button class="tool ghost" id="btn-hwsetup" style="display:none">♨ HW setup</button>
+      <button class="tool ghost" id="btn-gassetup" style="display:none">⛁ Gas setup</button>
       <button class="tool ghost" id="btn-pdf" title="Print this schematic to PDF — choose &quot;Save as PDF&quot; in the dialog">⎙ PDF</button>
       <button class="tool ghost" id="btn-save">⭳ Save</button>
       <button class="tool ghost" id="btn-load">⭱ Load</button>
@@ -292,6 +306,18 @@ const HW_PER_DWELLING = [0,
   6.08,6.15,6.25,6.30,6.38,6.45,6.53,6.60,6.68,6.75,
   6.83,6.90,6.98,7.05,7.13,7.20,7.28,7.35,7.43,7.50];
 
+// AS 5601-2022 capacity tables (MJ/h) from the workbook's hidden GAS DATA sheet:
+// F.12/F.13 natural gas through copper, F.24/F.25 through steel. cap[dnIndex][lengthIndex];
+// null = not tabulated for that length, or a workbook cell the validator rejected.
+const GAS_TABLES = {"f12":{"label":"F.12","material":"copper","drop":0.75,"range":"2.75-5 kPa","dn":[6,8,10,15,20,25,32,40,50,65,80,100,125,150],"lengths":[2,4,6,8,10,12,14,16,18,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,100,120,140,160,180,200,220,240,260,280,300,320],"cap":[[20,14,11,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null],[42,29,24,21,18,17,15,13,12,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null],[67,44,36,31,28,25,24,22,21,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null],[179,120,94,80,70,63,58,54,51,48,43,39,36,34,32,30,29,28,26,24,23,21,20,null,null,null,null,null,null,null,null,null,null,null,null,null],[619,417,330,279,245,221,202,186,174,164,143,129,118,109,101,95,91,87,83,80,78,75,73,71,67,61,57,53,50,48,45,43,41,38,35,33],[1394,942,747,634,558,502,459,426,397,374,328,295,270,249,233,219,207,197,188,179,172,166,160,155,145,131,120,113,106,101,96,92,88,85,82,80],[2718,1842,1464,1244,1095,987,904,837,782,736,648,583,533,494,461,434,410,390,372,356,342,330,318,308,289,260,237,219,204,192,182,173,165,158,153,148],[4624,3141,2501,2126,1874,1690,1548,1435,1341,1263,1112,1001,917,849,793,746,706,672,641,614,590,569,549,531,499,449,410,379,354,333,315,299,285,273,262,252],[10790,7359,5872,4999,4411,3981,3650,3385,3167,2984,2630,2371,2172,2013,1883,1773,1679,1597,1526,1462,1406,1355,1308,1266,1191,1073,981,908,849,798,755,715,685,656,630,607],[16754,null,11009,9382,8285,7483,6864,6369,5962,5619,4956,4472,4099,3801,3556,3349,3173,3020,2886,2767,2660,2564,2477,2398,2258,2034,1862,1725,1612,1517,1436,1366,1304,1250,1201,1157],[26639,22049,17641,15046,13294,12012,11023,10232,9580,9032,7971,7195,6598,6120,5727,5397,5114,4869,4653,4462,4291,4137,3997,3870,3645,3286,3010,2789,2608,2455,2325,2212,2112,2024,1946,1875],[null,null,null,null,null,null,null,null,null,20279,17913,16182,14848,13781,12902,12163,11530,10981,10499,10071,9688,9343,9029,8743,8240,7434,6815,6319,5911,5569,5275,5021,4798,4600,4423,4263],[null,null,null,null,null,null,null,null,null,37534,33175,29987,27527,25558,23937,22572,21404,20390,19499,18708,18001,17363,16784,16255,15233,13834,12687,11769,11014,10379,9836,9365,8951,8584,8256,7960],[null,null,null,null,null,null,null,null,null,60766,53738,48593,44622,41443,38824,36619,34732,33092,31652,30373,29229,28197,27260,26405,24898,22487,20630,19143,17921,16892,16012,15248,14577,13982,13449,12969]]},"f13":{"label":"F.13","material":"copper","drop":1.5,"range":"5-10 kPa","dn":[6,8,10,15,20,25,32,40,50,65,80,100,125,150],"lengths":[2,4,6,8,10,12,14,16,18,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,100,120,140,160,180,200,220,240,260,280,300,320],"cap":[[28,20,16,14,12,11,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null],[64,42,34,29,26,24,22,21,19,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null],[101,67,53,45,39,36,33,31,29,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null],[268,179,142,120,105,94,86,80,74,70,61,56,52,48,46,43,41,39,38,36,35,34,33,32,31,28,24,null,null,null,null,null,null,null,null,null],[919,621,492,418,367,331,302,280,261,246,216,194,177,164,153,144,136,129,123,118,113,109,105,102,96,87,81,75,71,67,64,62,59,57,55,53],[2060,1397,1111,944,831,749,686,635,594,559,491,442,405,374,350,329,311,296,282,270,260,250,241,233,219,197,180,166,155,146,138,131,125,121,117,113],[4001,2723,2170,1845,1627,1467,1344,1246,1165,1097,966,870,797,738,691,649,614,584,558,534,513,495,477,462,434,391,357,330,308,290,274,260,248,238,228,220],[6787,4633,3697,3147,2777,2506,2297,2130,1993,1878,1654,1491,1366,1266,1183,1114,1055,1004,959,919,883,851,821,795,748,673,616,570,532,500,473,450,429,411,395,380],[15755,10812,8649,7374,6514,5884,5398,5009,4689,4420,3899,3518,3225,2990,2798,2635,2497,2376,2271,2177,2093,2018,1949,1887,1776,1601,1465,1357,1269,1194,1130,1075,1026,983,945,910],[29267,20176,16171,13805,12204,11032,10127,9402,8805,8302,7329,6617,6069,5631,5270,4966,4706,4481,4283,4107,3950,3809,3680,3563,3356,3026,2772,2569,2403,2262,2142,2038,1947,1866,1794,1729],[46537,32208,25855,22094,19545,17677,16234,15077,14124,13321,11766,10629,9752,9050,8473,7987,7571,7210,6893,6612,6360,6133,5927,5739,5408,4879,4471,4145,3878,3652,3460,3293,3146,3016,2900,2795],[null,null,null,null,null,null,null,null,null,29823,26367,23837,21884,20321,19033,17949,17021,16215,15507,14879,14316,13809,13349,12929,12188,11004,10091,9362,8761,8257,7825,7450,7121,6829,6567,6332],[null,null,null,null,null,null,null,null,null,55075,48729,44087,40487,37610,35239,33243,31533,30047,28742,27583,26546,25610,24761,23985,22618,20432,18747,17398,16288,15355,14556,13862,13258,12713,12229,11793],[null,null,null,null,null,null,null,null,null,89006,78798,71312,65527,60889,57066,53846,51088,48691,46584,44713,43038,41527,40155,38902,36694,33160,30435,28254,26459,24948,23655,22533,21547,20672,19889,19183]]},"f24":{"label":"F.24","material":"steel","drop":0.75,"range":"2.75-5 kPa","dn":[15,20,25,32,40,50,65,80,100,125,150],"lengths":[2,4,6,8,10,12,14,16,18,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,100,120,140,160,180,200,220,240,260,280,300,320],"cap":[[502,344,276,235,207,187,172,159,149,140,123,111,102,94,87,82,78,75,72,69,67,65,63,61,58,53,49,46,43,41,null,null,null,null,null,null],[1115,769,617,527,466,421,386,359,336,317,279,252,231,214,200,188,178,169,162,155,149,143,138,134,122,111,103,97,91,86,82,79,76,73,70,68],[2078,1437,1155,988,874,791,727,675,632,596,527,475,436,404,378,356,338,321,307,294,283,273,263,255,240,216,197,183,171,154,147,141,135,130,126,122],[4373,3034,2443,2093,1855,1680,1545,1436,1346,1271,1124,1016,932,866,810,764,724,690,659,632,608,586,566,548,516,465,426,395,369,347,328,312,298,286,274,264],[6563,4562,3678,3153,2797,2534,2331,2168,2033,1919,1698,1536,1411,1310,1227,1157,1097,1045,1000,959,922,890,860,832,784,707,648,601,561,529,500,476,455,436,419,403],[12211,8512,6874,5900,5237,4750,4372,4068,3817,3605,3193,2891,2657,2469,2314,2183,2071,1973,1888,1812,1743,1682,1626,1575,1485,1340,1229,1140,1066,1004,952,906,865,829,797,768],[24220,16937,13701,11774,10461,9494,8745,8142,7643,7222,6403,5802,5336,4961,4652,4392,4168,3974,3803,3651,3515,3392,3280,3178,2998,2709,2486,2307,2160,2036,1930,1837,1756,1684,1620,1562],[36962,25901,20974,18037,16035,14560,13415,12494,11733,11090,9838,8918,8205,7632,7159,6760,6418,6120,5858,5625,5416,5228,5056,4900,4623,4180,3838,3564,3337,3147,2984,2842,2717,2607,2507,2418],[73797,51905,42107,36254,32260,29313,27025,25183,23660,22372,19865,18020,16590,15441,14491,13690,13002,12403,11876,11407,10987,10608,10263,9948,9391,8498,7808,7255,6798,6413,6083,5797,5545,5321,5120,4939],[127700,90115,73216,63101,56189,51086,47121,43928,41285,39051,34698,31493,29008,27009,25358,23963,22766,21724,20806,19990,19258,18596,17995,17446,16476,14919,13714,12748,11950,11278,10702,10201,9760,9369,9018,8701],[203942,144380,117470,101330,90287,82128,75786,70674,66442,62864,55889,50750,46763,43556,40905,38666,36744,35069,33595,32283,31106,30043,29077,28194,26633,24128,22190,20634,19349,18266,17338,16530,15820,15188,14622,14112]]},"f25":{"label":"F.25","material":"steel","drop":1.5,"range":"5-10 kPa","dn":[15,20,25,32,40,50,65,80,100,125,150],"lengths":[2,4,6,8,10,12,14,16,18,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,100,120,140,160,180,200,220,240,260,280,300,320],"cap":[[728,503,404,345,305,276,253,235,220,208,183,165,151,140,131,124,117,111,106,102,98,95,89,87,82,75,70,65,61,58,55,53,51,49,48,46],[1612,1118,900,770,683,618,568,528,495,467,412,373,342,317,297,280,265,252,241,231,222,214,207,200,188,170,155,144,134,122,117,112,107,103,100,97],[2993,2082,1679,1439,1277,1157,1064,990,928,876,775,701,644,598,560,528,500,476,456,437,420,405,392,379,357,322,295,273,255,240,227,216,206,198,190,183],[6276,4381,3540,3040,2699,2448,2254,2097,1968,1859,1647,1491,1370,1273,1193,1126,1068,1018,974,934,899,867,838,812,766,691,633,587,549,517,490,466,446,427,410,396],[9400,6575,5319,4571,4061,3685,3394,3159,2966,2802,2484,2250,2069,1923,1803,1702,1615,1539,1473,1414,1361,1313,1269,1230,1160,1047,961,891,834,786,745,709,677,649,624,602],[17434,12235,9914,8529,7584,6887,6347,5912,5552,5248,4656,4220,3883,3612,3388,3199,3037,2896,2772,2662,2563,2474,2392,2318,2187,1977,1815,1685,1578,1488,1410,1343,1284,1231,1185,1142],[34439,24267,19701,16970,15104,13727,12658,11797,11084,10482,9308,8444,7775,7236,6792,6416,6094,5813,5566,5346,5149,4971,4810,4662,4401,3982,3658,3398,3184,3004,2849,2714,2596,2491,2397,2312],[52409,37033,30103,25950,23111,21014,19385,18072,16985,16066,14276,12957,11934,11112,10432,9858,9365,8935,8557,8221,7920,7647,7400,7174,6774,6132,5636,5238,4910,4633,4395,4189,4007,3846,3701,3571],[104088,73940,60241,52004,46361,42188,38942,36324,34156,32322,28745,26109,24063,22416,21054,19904,18916,18055,17297,16623,16018,15471,14974,14520,13717,12428,11430,10629,9967,9410,8931,8515,8149,7824,7532,7269],[179212,127948,104460,90288,80560,73357,67748,63222,59471,56297,50102,45532,41984,39127,36763,34766,33049,31554,30237,29065,28013,27062,26198,25407,24010,21767,20029,18633,17481,16508,15674,14948,14309,13742,13233,12773],[284771,204340,167167,144658,129176,117696,108749,101524,95533,90461,80555,73243,67562,62985,59198,55997,53246,50848,48735,46854,45167,43641,42254,40985,38742,35138,32346,30102,28249,26686,25344,24176,23148,22234,21414,20675]]}};
+
+// GAS DATA!F9:G88 — diversity factor by number of dwellings. Looked up like the
+// workbook's VLOOKUP(...,TRUE): the largest row <= n, clamped at 80 dwellings.
+const GAS_DIVERSITY = [[1,1.0],[2,0.73],[3,0.702],[4,0.674],[5,0.65],[6,0.624],[7,0.602],[8,0.59],[9,0.559],[10,0.54],[11,0.522],[12,0.506],[13,0.482],[14,0.475],[15,0.46],[16,0.447],[17,0.434],[18,0.421],[19,0.409],[20,0.398],[21,0.387],[22,0.377],[23,0.367],[24,0.357],[25,0.348],[26,0.341],[27,0.332],[28,0.326],[29,0.317],[30,0.31],[31,0.303],[32,0.298],[33,0.292],[34,0.286],[35,0.281],[36,0.276],[37,0.272],[38,0.268],[39,0.264],[40,0.26],[41,0.256],[42,0.252],[43,0.248],[44,0.245],[45,0.242],[46,0.239],[47,0.236],[48,0.233],[49,0.231],[50,0.229],[51,0.227],[52,0.225],[53,0.223],[54,0.221],[55,0.219],[56,0.217],[57,0.216],[58,0.214],[59,0.212],[60,0.211],[61,0.209],[62,0.207],[63,0.206],[64,0.205],[65,0.204],[66,0.203],[67,0.203],[68,0.202],[69,0.201],[70,0.2],[71,0.199],[72,0.199],[73,0.198],[74,0.198],[75,0.197],[76,0.197],[77,0.196],[78,0.196],[79,0.196],[80,0.195]];
+
+// GAS DATA!A9:D19 — the pipe size selector (copper I.D./DN and the stainless columns).
+const GAS_SIZE_SELECTOR = [{"ID_mm":10.7,"DN":15,"ID_ss":13,"DN_ss":13},{"ID_mm":16.8,"DN":20,"ID_ss":20,"DN_ss":22},{"ID_mm":22.6,"DN":25,"ID_ss":25,"DN_ss":28},{"ID_mm":28.9,"DN":32,"ID_ss":32,"DN_ss":35},{"ID_mm":35.2,"DN":40,"ID_ss":39,"DN_ss":42},{"ID_mm":48.2,"DN":50,"ID_ss":51,"DN_ss":54},{"ID_mm":60.9,"DN":65,"ID_ss":72,"DN_ss":76.1},{"ID_mm":72.8,"DN":80,"ID_ss":85,"DN_ss":88.9},{"ID_mm":98.1,"DN":100,"ID_ss":104,"DN_ss":108},{"ID_mm":122.94,"DN":125,"ID_ss":135,"DN_ss":139.7},{"ID_mm":148,"DN":150,"ID_ss":164,"DN_ss":168.3}];
+
 // ====================== sizing engine (ported from the Python engine) ======================
 function flowFromDwellings(n){ if(!n) return 0; return 0.03*n + 0.4554*Math.sqrt(n); }
 function flowFromLU(lu){
@@ -318,6 +344,66 @@ function selectPipe(flowLs, material, vmax){
   return null; // over capacity
 }
 function phi(dn){ return dn!=null ? ('Ø'+dn) : null; } // drawing callout style, e.g. Ø28
+// MJ/hr callout: whole numbers on the drawing, one decimal only for the small branch loads
+function fmtMJ(v){ if(v==null||isNaN(v)) return '—';
+  return (v>=100? Math.round(v) : Math.round(v*10)/10).toLocaleString(); }
+
+// ====================== gas sizing engine ======================
+// Mirrors GAS CALCS columns C..H. Gas does not size on velocity: demand is MJ/hr, and the pipe is
+// read straight out of the AS 5601 table for the sheet's index length. Pure — no DOM, no `state`.
+const GAS_DEFAULTS = {
+  demandPerDwelling: 40,  // FRONT PAGE D14 (MJ/hr per dwelling)
+  indexLength: 200,       // FRONT PAGE D15 (m) — must be one of the table's tabulated lengths
+  table: 'f12',           // FRONT PAGE F14
+  diversity: true,        // FRONT PAGE F15 ON/OFF
+  tolerancePct: 10        // FRONT PAGE B15; blank there means x1.1, i.e. 10%
+};
+function gasTable(key){ return GAS_TABLES[key]||GAS_TABLES.f12; }
+function gasTableKeys(){ return Object.keys(GAS_TABLES); }
+function gasTableLabel(key){ const t=gasTable(key);
+  return t.label+' — '+t.range+' ('+t.material+', '+t.drop+' kPa drop)'; }
+// the lengths the tables are actually tabulated at; MATCH(...,0) in the workbook is an EXACT
+// match, so the UI offers these and nothing else.
+function gasLengths(){ return gasTable('f12').lengths.slice(); }
+// VLOOKUP(n, 'GAS DATA'!F9:G88, 2, TRUE): the largest tabulated count <= n. Below 1 dwelling there
+// is no factor; above 80 the workbook keeps using the last row.
+function gasDiversity(dwellings){
+  const n=+dwellings||0;
+  if(n<GAS_DIVERSITY[0][0]) return null;
+  let f=GAS_DIVERSITY[0][1];
+  for(const [count,factor] of GAS_DIVERSITY){ if(count<=n) f=factor; else break; }
+  return f;
+}
+// capacity (MJ/h) of one DN at the index length, or null where the table does not tabulate it
+// (short runs on big pipe) or where the workbook cell failed validation — see GAS_TABLES.
+function gasCapacity(tableKey, dn, indexLength){
+  const t=gasTable(tableKey);
+  const di=t.dn.indexOf(+dn), li=t.lengths.indexOf(+indexLength);
+  if(di<0||li<0) return null;
+  const v=t.cap[di][li];
+  return v==null? null : v;
+}
+// smallest DN whose capacity covers the demand — the exact-or-next-larger shape of selectPipe.
+// Returns null when nothing in the table fits (over capacity).
+function selectGasPipe(mjhr, tableKey, indexLength){
+  const t=gasTable(tableKey);
+  const q=+mjhr||0;
+  for(const dn of t.dn){
+    const cap=gasCapacity(tableKey,dn,indexLength);
+    if(cap!=null && cap>=q) return {DN:dn, cap};
+  }
+  return null;
+}
+// GAS CALCS G: diversity applies to the dwelling demand only; plant load is added after it,
+// undiversified. With no dwellings the column collapses to the plant load alone.
+function gasAdjusted(dwellings, perDwelling, diversityOn, plantLoad){
+  const dw=+dwellings||0, per=+perDwelling||0, plant=+plantLoad||0;
+  if(dw<=0) return plant;
+  const f = diversityOn ? gasDiversity(dw) : 1;
+  return dw*per*(f==null?1:f) + plant;
+}
+// GAS CALCS H applies FRONT PAGE B15 as a percentage margin before the table lookup.
+function gasTolerance(pct){ const p=+pct; return 1 + ((isNaN(p)? GAS_DEFAULTS.tolerancePct : p)/100); }
 
 // ====================== pressure / PRV engine ======================
 // Mirrors FRONT PAGE!N21:N81 (per-level static pressure), J12 (max pressure in pipe),
@@ -400,19 +486,25 @@ function pressurePass(opts){
           perStorey, settings:s};
 }
 
-// per-service demand + labels; each sheet (cold water / hot water) sizes independently.
+// per-service demand + labels; each sheet (cold water / hot water / gas) sizes independently.
 // hot water uses the per-dwelling table with no loading-unit term (see HW CALCS in the workbook).
+// `kind` splits the two sizing regimes: 'water' sizes on velocity and accumulates L/s, 'gas'
+// sizes off the AS 5601 tables and accumulates dwellings + plant load (see sizePipes).
 const SERVICE_DEF = {
-  cw:{ label:'CW', title:'COLD WATER SCHEMATIC — PIPE SIZING', sheetName:'Cold Water Schematic',
+  cw:{ label:'CW', kind:'water', title:'COLD WATER SCHEMATIC — PIPE SIZING', sheetName:'Cold Water Schematic',
        demand:(dw,lu,ex,pump)=>Math.max(flowFromDwellings(dw),pump)+flowFromLU(lu)+ex },
-  hw:{ label:'HW', title:'HOT WATER SCHEMATIC — PIPE SIZING', sheetName:'Hot Water Schematic',
-       demand:(dw,lu,ex,pump)=>Math.max(hwFlowFromDwellings(dw),pump)+ex }
+  hw:{ label:'HW', kind:'water', title:'HOT WATER SCHEMATIC — PIPE SIZING', sheetName:'Hot Water Schematic',
+       demand:(dw,lu,ex,pump)=>Math.max(hwFlowFromDwellings(dw),pump)+ex },
+  gas:{ label:'GAS', kind:'gas', title:'GAS SCHEMATIC — PIPE SIZING', sheetName:'Gas Schematic',
+       demand:()=>0 } // gas never goes through demand(): see gasAdjusted / riserGasLoad
 };
 function curDef(){ return SERVICE_DEF[state.activeService]||SERVICE_DEF.cw; }
+function isGasSheet(){ return curDef().kind==='gas'; }
 
-// per-level entry on a riser: {dwellings, lu, extra, pump}, indexed by building level (0 = lowest)
-function blankLevel(){ return {dwellings:0, lu:0, extra:0, pump:0}; }
-function levelHasDemand(L){ return L && ((+L.dwellings||0)>0 || (+L.lu||0)>0 || (+L.extra||0)>0 || (+L.pump||0)>0); }
+// per-level entry on a riser: {dwellings, lu, extra, pump, mj}, indexed by building level
+// (0 = lowest). `mj` is a gas plant load in MJ/hr and is read only by the gas sheet.
+function blankLevel(){ return {dwellings:0, lu:0, extra:0, pump:0, mj:0}; }
+function levelHasDemand(L){ return L && ((+L.dwellings||0)>0 || (+L.lu||0)>0 || (+L.extra||0)>0 || (+L.pump||0)>0 || (+L.mj||0)>0); }
 // the riser's base is its explicit start level; demand below it is ignored
 function riserStartIdx(n){
   const s = n.start!=null ? n.start : state.building.groundIdx;
@@ -444,6 +536,23 @@ function riserBaseFlow(node){
     dw+=(+L.dwellings||0); lu+=(+L.lu||0); extra+=(+L.extra||0); pump=Math.max(pump,+L.pump||0); }
   return curDef().demand(dw, lu, extra, pump);
 }
+// The gas analogue of riserBaseFlow. It deliberately returns the RAW ingredients rather than a
+// demand: diversity is non-linear in the dwelling count, so two risers' diversified loads can
+// never be added. Everything upstream adds {dwellings, plantLoad} and diversifies once, at the end.
+function riserGasLoad(node){
+  let dwellings=0, plantLoad=0;
+  for(let i=riserStartIdx(node);i<node.data.length;i++){ const L=node.data[i]||{};
+    dwellings+=(+L.dwellings||0); plantLoad+=(+L.mj||0); }
+  return {dwellings, plantLoad};
+}
+function addGasLoad(a,b){ return {dwellings:a.dwellings+b.dwellings, plantLoad:a.plantLoad+b.plantLoad}; }
+// one gas load -> MJ/hr and a pipe size, using this riser's (or the sheet's) settings
+function sizeGasLoad(load, g){
+  const mj = gasAdjusted(load.dwellings, g.demandPerDwelling, g.diversity, load.plantLoad);
+  if(mj<=0) return {mj:0, dn:null, cap:null, unsized:true};
+  const pick = selectGasPipe(mj*gasTolerance(g.tolerancePct), g.table, g.indexLength);
+  return {mj, dn: pick?pick.DN:null, cap: pick?pick.cap:null, unsized:false, over: !pick};
+}
 
 // the FRONT PAGE H9-H12 / J9-J11 inputs. They live on the network (entered at job setup, edited
 // on the mains supply / HW plant); a riser may override any one of them, exactly like material
@@ -459,6 +568,32 @@ const blank=v=>v===''||v==null;
 function resolveRl(n){
   const own=(n&&n.rl)||{}, sup=supplyRl(), out={};
   RL_KEYS.forEach(k=>{ out[k] = blank(own[k]) ? sup[k] : own[k]; });
+  return out;
+}
+// The FRONT PAGE gas inputs (D14 demand/dwelling, D15 index length, F14 table, F15 diversity,
+// B15 tolerance). The master workbook carries a set per riser; here they live on the gas network
+// and a riser may override any one of them — blank on the riser means "inherit", the same pattern
+// as material / maxVelocity / the R.L. fields.
+const GAS_KEYS=['demandPerDwelling','indexLength','table','diversity','tolerancePct'];
+const GAS_LABELS={demandPerDwelling:'Demand / dwelling (MJ/hr)', indexLength:'Index length (m)',
+  table:'Table (AS 5601-2022)', diversity:'Diversity', tolerancePct:'Tolerance (%)'};
+function blankGas(){ const o={}; GAS_KEYS.forEach(k=>o[k]=''); return o; }
+// the sheet-level defaults, held on the gas network and seeded from GAS_DEFAULTS
+function supplyGas(){
+  const s=curSvc().network;
+  if(!s.gas) s.gas=Object.assign({}, GAS_DEFAULTS);
+  return s.gas;
+}
+// riser value if entered, otherwise the sheet value, otherwise the workbook default
+function resolveGas(n){
+  const own=(n&&n.gas)||{}, sup=supplyGas(), out={};
+  GAS_KEYS.forEach(k=>{
+    let v = blank(own[k]) ? sup[k] : own[k];
+    if(blank(v)) v = GAS_DEFAULTS[k];
+    out[k] = (k==='diversity') ? (v===true||v==='true'||v==='on'||v==='ON') : v;
+  });
+  out.demandPerDwelling=+out.demandPerDwelling||0;
+  out.indexLength=+out.indexLength||GAS_DEFAULTS.indexLength;
   return out;
 }
 // pressure profile for one riser; the duty flow is the riser's own diversified demand, the
@@ -482,6 +617,7 @@ function hasPressureInputs(n){
 // exports = {levelIdx: L/s leaving the riser at that level to feed downstream nodes}
 // demand below the start level is excluded; pass-through segments still carry exports.
 function riserSegments(n, feed, exports, bot, top){
+  if(isGasSheet()) return riserGasSegments(n, feed, exports, bot, top);
   const mat=n.material||curSvc().network.material, vmax=n.maxVelocity||curSvc().network.maxVelocity;
   const s0=riserStartIdx(n);
   const grp=(a,b)=>{ let dw=0,lu=0,ex=0,pump=0,er=0;
@@ -493,6 +629,25 @@ function riserSegments(n, feed, exports, bot, top){
     const flow = i>=feed ? grp(i+1,top) : grp(bot,i);
     const pipe=selectPipe(flow,mat,vmax); const v=pipe?velocityMs(flow,pipe.ID_mm):NaN;
     out.push({i, flow, dn:pipe?pipe.DN:null, vel:v, over: pipe? v>vmax : true});
+  }
+  return out;
+}
+// The gas version of the same walk. It accumulates dwelling counts and plant loads, then
+// diversifies ONCE per segment — the GAS CALCS columns C..H, one row per segment. `exports` here
+// holds {dwellings, plantLoad} rather than L/s, for the same non-linearity reason.
+function riserGasSegments(n, feed, exports, bot, top){
+  const g=resolveGas(n), s0=riserStartIdx(n);
+  const grp=(a,b)=>{ let load={dwellings:0,plantLoad:0};
+    for(let i=a;i<=b;i++){ const d= i>=s0 ? (n.data[i]||{}) : {};
+      load.dwellings+=(+d.dwellings||0); load.plantLoad+=(+d.mj||0);
+      const ex=exports[i]; if(ex) load=addGasLoad(load,ex); }
+    return load; };
+  const out=[];
+  for(let i=bot;i<top;i++){
+    const load = i>=feed ? grp(i+1,top) : grp(bot,i);
+    const s=sizeGasLoad(load,g);
+    out.push({i, flow:s.mj, mj:s.mj, dwellings:load.dwellings, plantLoad:load.plantLoad,
+              dn:s.dn, cap:s.cap, vel:NaN, over: !s.unsized && s.over});
   }
   return out;
 }
@@ -510,7 +665,11 @@ let state = {
   activeService:'cw',
   services:{
     cw:{ network:{material:'copper_type_b',maxVelocity:DEFAULT_MAX_VEL,supply:blankRl()}, nodes:[], pipes:[] },
-    hw:{ network:{material:'copper_type_b',maxVelocity:1.2,supply:blankRl()}, nodes:[], pipes:[] }
+    hw:{ network:{material:'copper_type_b',maxVelocity:1.2,supply:blankRl()}, nodes:[], pipes:[] },
+    // gas sizes off the AS 5601 tables, so material/maxVelocity are unused here; the sheet-level
+    // FRONT PAGE inputs live in network.gas and every riser inherits them (resolveGas).
+    gas:{ network:{material:'copper_type_b',maxVelocity:DEFAULT_MAX_VEL,supply:blankRl(),
+                   gas:Object.assign({}, GAS_DEFAULTS)}, nodes:[], pipes:[] }
   }
 };
 // active-sheet accessor: nodes / pipes / network live per service under state.services
@@ -700,6 +859,31 @@ function sizePipes(){
       // feedPipe is the BFS tree edge the riser is fed by — what "Reconnect feed" replaces
       if(on&&on.type==='riser'){ riserInfo[o].feed=clampLevel(on, oAtt.level); riserInfo[o].feedPipe=p.id; }
     } } }
+  if(isGasSheet()){
+    // Gas accumulates the RAW load — dwelling counts and plant loads — up the tree, and applies
+    // diversity once, at each pipe, to that pipe's own cumulative dwelling count. Summing
+    // diversified demands instead (the water path below) would undersize every shared main,
+    // because the diversity curve is steeply non-linear in the number of dwellings.
+    const load={}; curSvc().nodes.forEach(n=>load[n.id]= n.type==='riser'?riserGasLoad(n):{dwellings:0,plantLoad:0});
+    for(let i=order.length-1;i>=0;i--){ const u=order[i]; if(parent[u]!=null){
+      load[parent[u]]=addGasLoad(load[parent[u]], load[u]);
+      const pn=getNode(parent[u]);
+      if(pn&&pn.type==='riser'){ // load leaving this riser at the attachment level, to feed the subtree
+        const lvl=clampLevel(pn, pAttU[u].level);
+        const cur=riserInfo[parent[u]].exports[lvl]||{dwellings:0,plantLoad:0};
+        riserInfo[parent[u]].exports[lvl]=addGasLoad(cur, load[u]);
+      }
+    }}
+    curSvc().nodes.forEach(n=>{ const pp=pPipe[n.id]; if(!pp) return;
+      const L=load[n.id];
+      if(L.dwellings<=0 && L.plantLoad<=0) return;
+      // the run feeding a riser is sized on that riser's settings (the workbook keeps index length
+      // and demand/dwelling per riser); anything else — a shared main, a tee — uses the sheet's.
+      const s=sizeGasLoad(L, resolveGas(n.type==='riser'?n:null));
+      res[pp.id]={flow:s.mj, mj:s.mj, dwellings:L.dwellings, plantLoad:L.plantLoad,
+                  dn:s.dn, cap:s.cap, vel:null, over:s.over, unsized:false};
+    });
+  } else {
   const demand={}; curSvc().nodes.forEach(n=>demand[n.id]= n.type==='riser'?riserBaseFlow(n):0);
   for(let i=order.length-1;i>=0;i--){ const u=order[i]; if(parent[u]!=null){
     demand[parent[u]]+=demand[u];
@@ -713,6 +897,7 @@ function sizePipes(){
   curSvc().nodes.forEach(n=>{ const pp=pPipe[n.id]; if(pp){ const f=demand[n.id];
     if(f>1e-9){ const pipe=selectPipe(f,mat,vmax); const v=pipe?velocityMs(f,pipe.ID_mm):NaN;
       res[pp.id]={flow:f,dn:pipe?pipe.DN:null,vel:v,over:pipe?v>vmax:true,unsized:false}; } }});
+  }
   // An HWU carries no cold-water demand, so its feed would fall through the f>0 test above and
   // render as a grey "no path from source" error. It IS connected — flag it so the run draws
   // normally and is labelled with the unit instead of a Ø.
@@ -737,6 +922,10 @@ function haloed(a){ return Object.assign({stroke:'#f7f8fa','stroke-width':3.5,'p
 // size of the meter branch serving a single level's own demand
 function levelBranch(n,i){
   const d=n.data[i]||{};
+  if(isGasSheet()){ // the level's own dwellings, diversified on that count alone, plus its plant load
+    const s=sizeGasLoad({dwellings:+d.dwellings||0, plantLoad:+d.mj||0}, resolveGas(n));
+    return {flow:s.mj, mj:s.mj, dn:s.dn, cap:s.cap, over: s.unsized? false : s.over};
+  }
   const flow=curDef().demand(+d.dwellings||0,+d.lu||0,+d.extra||0,+d.pump||0);
   const mat=n.material||curSvc().network.material, vmax=n.maxVelocity||curSvc().network.maxVelocity;
   const pipe=selectPipe(flow,mat,vmax); const v=pipe?velocityMs(flow,pipe.ID_mm):NaN;
@@ -777,8 +966,12 @@ function drawBranch(g,n,i,by,dir){
   const parts=[];
   if(dw>0) parts.push(dw+' x '+curDef().label+' METERS');
   if(n.hwu && dw>0) parts.push(dw+' x HWU');
-  if(+Ld.lu>0) parts.push((+Ld.lu)+' LU');
-  if(+Ld.extra>0) parts.push((+Ld.extra)+' L/s');
+  if(isGasSheet()){
+    if(+Ld.mj>0) parts.push(fmtMJ(+Ld.mj)+' MJ/hr PLANT');
+  } else {
+    if(+Ld.lu>0) parts.push((+Ld.lu)+' LU');
+    if(+Ld.extra>0) parts.push((+Ld.extra)+' L/s');
+  }
   g.appendChild(txt(labelX+dir*8,by+16,parts.join(' + '),
     haloed({'text-anchor':dir>0?'start':'end','font-family':'var(--sans)','font-size':10,'letter-spacing':'.03em','font-weight':600,fill:'#44536a','stroke-width':3})));
 }
@@ -908,7 +1101,9 @@ function render(){
       'text-anchor': horiz?'middle':'end'});
     if(r.dn){
       topLabels.push(txt(tx,ty,curDef().label+' '+phi(r.dn),attrs));
-      const sub=r.flow.toFixed(2)+' L/s · '+r.vel.toFixed(2)+' m/s';
+      // gas reads in MJ/hr and has no velocity — the table lookup already fixed the pressure drop
+      const sub=isGasSheet()? fmtMJ(r.mj)+' MJ/hr'
+                            : r.flow.toFixed(2)+' L/s · '+r.vel.toFixed(2)+' m/s';
       const sattrs=haloed({'font-family':'var(--mono)','font-size':11,'font-weight':600,fill:'#3d4d61',
         'text-anchor': horiz?'middle':'end','stroke-width':3});
       topLabels.push(txt(horiz?lx:lx-10, horiz?ly-9:ly+12, sub, sattrs));
@@ -1028,7 +1223,9 @@ function render(){
         else if(i>bot&&i<top) g.appendChild(el('line',{x1:n.x,y1:ty,x2:n.x+dir*8,y2:ty,stroke:'#b9c2cf','stroke-width':1.2}));
       }
       // ---- static pressure, PRV flags and pump duty (toggle: ⛅ Pressure in the toolbar)
-      const pr = (state.settings.showPressure && hasPressureInputs(n)) ? riserPressure(n) : null;
+      // no static-pressure overlay on gas: that engine is water head, and gas pressure is already
+      // accounted for by the table's pressure-drop band
+      const pr = (!isGasSheet() && state.settings.showPressure && hasPressureInputs(n)) ? riserPressure(n) : null;
       if(pr){
         // sits further out than the Ø callouts so it clears the ▶ feed marker, which occupies
         // n.x ± 6..16 on this same side at the feed level
@@ -1460,6 +1657,9 @@ function renderPanel(){
     else if(n.type==='hwu'){ kicker.textContent='Hot Water Unit'; title.textContent=n.name; renderHwuPanel(n,body); }
     else if(n.type==='source'){ kicker.textContent='Source'; title.textContent=n.name; renderSourcePanel(n,body); }
     else { kicker.textContent='Tee / Junction'; title.textContent=n.name||'Tee'; renderNamePanel(n,body,'Label'); }
+  } else if(ui.selKind==='pipe' && isGasSheet()){
+    kicker.textContent='Main segment'; title.textContent='Gas pipe';
+    renderGasPipePanel(sizePipes()[ui.selId]||{}, body);
   } else if(ui.selKind==='pipe'){
     kicker.textContent='Main segment'; title.textContent='Pipe';
     const r=sizePipes()[ui.selId]||{};
@@ -1491,25 +1691,70 @@ function renderPanel(){
         </div>`; })()}
     <p class="empty" style="margin-top:12px">Mains carry the demand of everything downstream of them. A pipe with a free (open) end is not sized — finish it onto a node.</p>
     <button class="tool" style="margin-top:8px;width:100%;justify-content:center" onclick="deleteSelected()">🗑 Delete this pipe</button>`;
-    // riser attachments: editable attach level + 📌 pin (a pinned feed stays put when the riser's start level changes)
-    const selP=getPipe(ui.selId);
-    if(selP) ['a','b'].forEach(endKey=>{
-      const att=selP[endKey]; if(!att) return;
-      const nd=getNode(att.node); if(!nd||nd.type!=='riser') return;
-      const sec=document.createElement('div');
-      sec.innerHTML=`<div class="sect">End ${endKey==='a'?'A':'B'} — ${escapeHtml(nd.name)}</div>
-        <div class="row"><label>Attached at level
-          <select class="field">${state.building.levels.map((nm,i)=>`<option value="${i}" ${i===clampLevel(nd,att.level)?'selected':''}>${escapeHtml(nm)}</option>`).join('')}</select></label></div>
-        <label style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink-dim);margin-bottom:10px">
-          <input type="checkbox" ${att.pin?'checked':''} style="margin:0"> 📌 Pin this level (don't follow the riser's start level)</label>`;
-      sec.querySelector('select').addEventListener('change',e=>{ att.level=parseInt(e.target.value)||0; render(); });
-      sec.querySelector('input[type=checkbox]').addEventListener('change',e=>{ att.pin=e.target.checked||undefined; });
-      body.insertBefore(sec, body.querySelector('button.tool'));
-    });
+    appendAttachEditors(body);
   } else {
     kicker.textContent='Building'; title.textContent=(state.building.job&&state.building.job.name)||'Levels & network';
     renderBuildingPanel(body);
   }
+}
+
+// riser attachments on the selected pipe: editable attach level + 📌 pin (a pinned feed stays put
+// when the riser's start level changes). Shared by the water and gas pipe panels.
+function appendAttachEditors(body){
+  const selP=getPipe(ui.selId);
+  if(!selP) return;
+  ['a','b'].forEach(endKey=>{
+    const att=selP[endKey]; if(!att) return;
+    const nd=getNode(att.node); if(!nd||nd.type!=='riser') return;
+    const sec=document.createElement('div');
+    sec.innerHTML=`<div class="sect">End ${endKey==='a'?'A':'B'} — ${escapeHtml(nd.name)}</div>
+      <div class="row"><label>Attached at level
+        <select class="field">${state.building.levels.map((nm,i)=>`<option value="${i}" ${i===clampLevel(nd,att.level)?'selected':''}>${escapeHtml(nm)}</option>`).join('')}</select></label></div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--ink-dim);margin-bottom:10px">
+        <input type="checkbox" ${att.pin?'checked':''} style="margin:0"> 📌 Pin this level (don't follow the riser's start level)</label>`;
+    sec.querySelector('select').addEventListener('change',e=>{ att.level=parseInt(e.target.value)||0; render(); });
+    sec.querySelector('input[type=checkbox]').addEventListener('change',e=>{ att.pin=e.target.checked||undefined; });
+    body.insertBefore(sec, body.querySelector('button.tool'));
+  });
+}
+
+// the gas sheet's pipe readout — MJ/hr and table capacities in place of L/s and velocity
+function renderGasPipePanel(r, body){
+  const g=resolveGas(null), t=gasTable(g.table);
+  const tol=gasTolerance(g.tolerancePct), need=(r.mj||0)*tol;
+  const div = r.dwellings>0 ? (g.diversity? gasDiversity(r.dwellings) : 1) : null;
+  body.innerHTML=`<div class="readout">
+    <div><span class="k">Dwellings served</span><span class="v">${r.dwellings!=null?r.dwellings:'—'}</span></div>
+    ${div!=null?`<div><span class="k">Diversity factor</span><span class="v">${div.toFixed(3)}${g.diversity?'':' (off)'}</span></div>`:''}
+    ${r.plantLoad>0?`<div><span class="k">Plant load</span><span class="v">${fmtMJ(r.plantLoad)} MJ/hr</span></div>`:''}
+    <div><span class="k">Adjusted demand</span><span class="v">${r.mj!=null?fmtMJ(r.mj)+' MJ/hr':'—'}</span></div>
+    <div><span class="k">+ ${(tol*100-100).toFixed(0)}% tolerance</span><span class="v">${r.mj!=null?fmtMJ(need)+' MJ/hr':'—'}</span></div>
+    <div><span class="k">Size</span><span class="v ${r.over?'warn':''}">${r.dn?phi(r.dn):(r.unsized?'not sized':'OVER CAPACITY')}</span></div>
+    ${r.cap!=null?`<div><span class="k">Table capacity</span><span class="v">${fmtMJ(r.cap)} MJ/hr</span></div>`:''}
+    ${(()=>{ if(!r.unsized) return '';
+      const p=getPipe(ui.selId);
+      if(p&&(!p.a||!p.b)) return '<div><span class="k">Why</span><span class="v warn">open end ○ — not attached</span></div>';
+      return '<div><span class="k">Why</span><span class="v warn">no path from source (loop or gap)</span></div>'; })()}
+    <div><span class="k">Table</span><span class="v">${escapeHtml(t.label)}</span></div>
+    <div><span class="k">Index length</span><span class="v">${g.indexLength} m</span></div>
+  </div>
+  ${(()=>{ if(r.mj==null||r.mj<=0) return '';
+    let idx=t.dn.findIndex(dn=>{ const c=gasCapacity(g.table,dn,g.indexLength); return c!=null && c>=need; });
+    if(idx<0) idx=t.dn.length;
+    const row=(i,tag)=>{ if(i<0||i>=t.dn.length) return '';
+      const c=gasCapacity(g.table,t.dn[i],g.indexLength);
+      if(c==null) return `<div><span class="k">${phi(t.dn[i])} ${tag}</span><span class="v warn">not tabulated at ${g.indexLength} m</span></div>`;
+      const short=c<need;
+      return `<div><span class="k">${phi(t.dn[i])} ${tag}</span><span class="v ${short?'warn':''}">${fmtMJ(c)} MJ/hr${short?' ▲ short':''}</span></div>`; };
+    return `<div class="sect">Size options at ${fmtMJ(need)} MJ/hr</div>
+      <div class="readout">
+        ${row(idx-1,'— one size down')}
+        ${row(idx,'— recommended')||'<div><span class="k">No size fits</span><span class="v warn">over capacity</span></div>'}
+        ${row(idx+1,'— one size up')}
+      </div>`; })()}
+  <p class="empty" style="margin-top:12px">Sized from AS 5601-2022 ${escapeHtml(t.label)} (${escapeHtml(t.range)}, ${t.drop} kPa drop, ${escapeHtml(t.material)}) at the sheet's index length. Diversity is applied once, to the dwellings this run serves — diversified loads are never added together.</p>
+  <button class="tool" style="margin-top:8px;width:100%;justify-content:center" onclick="deleteSelected()">🗑 Delete this pipe</button>`;
+  appendAttachEditors(body);
 }
 
 function renderBuildingPanel(body){
@@ -1534,7 +1779,9 @@ function renderBuildingPanel(body){
       <li>Wheel = zoom · middle- or right-drag = pan · <kbd>Z</kbd> zoom extents.</li>
       <li>Risers slide along the floor lines; pipes stay attached.</li>
     </ul>
-    <p class="empty">Sizing uses the GFB residential method: dwelling demand curve + loading-unit (PSFR) curve, smallest pipe under the velocity limit. Riser segments size away from the feed point (top-fed, bottom-fed or mid-fed), including flow exported to other risers.</p>`;
+    <p class="empty">${isGasSheet()
+      ? 'Sizing mirrors the workbook\'s GAS CALCS sheet: cumulative dwellings × MJ/hr each × the diversity factor, plus plant loads, then the smallest pipe in the selected AS 5601-2022 table that carries it at the sheet\'s index length. Diversity is applied once per run, never added.'
+      : 'Sizing uses the GFB residential method: dwelling demand curve + loading-unit (PSFR) curve, smallest pipe under the velocity limit. Riser segments size away from the feed point (top-fed, bottom-fed or mid-fed), including flow exported to other risers.'}</p>`;
   body.appendChild(wrap);
   const host=wrap.querySelector('#blevels');
   const head=document.createElement('div'); head.className='lvl-head b';
@@ -1688,6 +1935,8 @@ function renderRiserPanel(n,body){
   const wrap=document.createElement('div');
   const base=riserBaseFlow(n);
   if(!n.rl) n.rl=blankRl();
+  const gasSheet=isGasSheet();
+  if(gasSheet && !n.gas) n.gas=blankGas();
   const rl=n.rl, pr=riserPressure(n);
   const info=riserInfo[n.id]||{feed:null,feedPipe:null,exports:{}};
   const feedName= info.feed!=null? state.building.levels[info.feed] : 'not connected';
@@ -1699,14 +1948,14 @@ function renderRiserPanel(n,body){
       <label>Starts at
         <select class="field" id="rstart">${state.building.levels.map((nm,i)=>`<option value="${i}" ${i===riserStartIdx(n)?'selected':''}>${escapeHtml(nm)}</option>`).join('')}</select>
       </label>
-      <label>Material
+      ${gasSheet?'':`<label>Material
         <select class="field" id="rmat">
           <option value="">Use main default</option>
           <option value="copper_type_b">Copper Type B</option>
           <option value="stainless_steel">Stainless Steel</option>
         </select>
       </label>
-      <label>Max vel (m/s)<input class="field" id="rvel" type="number" step="0.1" placeholder="default" value="${n.maxVelocity||''}"></label>
+      <label>Max vel (m/s)<input class="field" id="rvel" type="number" step="0.1" placeholder="default" value="${n.maxVelocity||''}"></label>`}
     </div>
     <div class="row">
       <label>Meter branch side
@@ -1716,22 +1965,22 @@ function renderRiserPanel(n,body){
         </select>
       </label>
     </div>
-    <label style="flex-direction:row;align-items:center;gap:8px;margin-top:8px">
+    ${gasSheet?'':`<label style="flex-direction:row;align-items:center;gap:8px;margin-top:8px">
       <input type="checkbox" id="rhwu" ${n.hwu?'checked':''} style="width:auto;margin:0"> Individual HWUs — one per dwelling on each served level
-    </label>
-    <div class="sect">Pressure &amp; pump duty — overrides</div>
+    </label>`}
+    ${gasSheet? gasFields(n.gas||blankGas(), supplyGas()) : `<div class="sect">Pressure &amp; pump duty — overrides</div>
     ${rlFields(rl, supplyRl())}
     <p class="empty" style="margin-top:6px">Blank = inherited from the mains supply (shown greyed). Type a value to override it for this riser only.</p>
     ${pr.warnings.map(w=>`<p class="empty warn" style="margin:8px 0 0">⚠ ${escapeHtml(w.text)}</p>`).join('')}
     ${pr.firstPrvIdx!=null?`<p class="empty warn" style="margin:8px 0 0">⚠ PRV REQUIRED — ${pr.prvDwellings} DWELLING${pr.prvDwellings===1?'':'S'} AT ${escapeHtml(state.building.levels[pr.firstPrvIdx]||'')} AND BELOW (${pr.prvLevels} level${pr.prvLevels===1?'':'s'})</p>`:''}
-    ${pressureReadout(pr)}
+    ${pressureReadout(pr)}`}
     <div class="sect">Demand per level (top first)</div>
     <div class="levels" id="levels"></div>
     <div class="readout" style="margin-top:12px">
-      <div><span class="k">Total riser flow</span><span class="v">${base.toFixed(3)} L/s</span></div>
+      ${gasSheet? gasRiserReadout(n) : `<div><span class="k">Total riser flow</span><span class="v">${base.toFixed(3)} L/s</span></div>`}
       <div><span class="k">Fed at</span><span class="v">${escapeHtml(feedName)}</span></div>
     </div>
-    <p class="empty" style="margin-top:8px">Segments size away from the feed point. The riser spans from its lowest to highest level with demand — give a level dwellings/LU to extend it.</p>
+    <p class="empty" style="margin-top:8px">Segments size away from the feed point. The riser spans from its lowest to highest level with demand — give a level ${gasSheet?'dwellings or a plant load':'dwellings/LU'} to extend it.</p>
     <div class="row" style="margin-top:10px">
       <label>Feed at level
         <select class="field" id="rfeedlvl">${state.building.levels.map((nm,i)=>`<option value="${i}" ${i===(info.feed!=null?info.feed:riserStartIdx(n))?'selected':''}>${escapeHtml(nm)}</option>`).join('')}</select>
@@ -1753,10 +2002,14 @@ function renderRiserPanel(n,body){
   });
   const fsel=wrap.querySelector('#rflip'); fsel.value=n.flip?'right':'left';
   fsel.addEventListener('change',e=>{ n.flip = e.target.value==='right'; render(); });
-  wrap.querySelector('#rhwu').addEventListener('change',e=>{ n.hwu=e.target.checked||undefined; render(); });
-  const matSel2=wrap.querySelector('#rmat'); matSel2.value=n.material||''; matSel2.addEventListener('change',e=>{ n.material=e.target.value; renderPanel(); render(); });
-  wrap.querySelector('#rvel').addEventListener('input',e=>{ n.maxVelocity=e.target.value?parseFloat(e.target.value):null; renderPanel(); render(); });
-  bindRlFields(wrap, n.rl);
+  if(gasSheet){
+    bindGasFields(wrap, n.gas);
+  } else {
+    wrap.querySelector('#rhwu').addEventListener('change',e=>{ n.hwu=e.target.checked||undefined; render(); });
+    const matSel2=wrap.querySelector('#rmat'); matSel2.value=n.material||''; matSel2.addEventListener('change',e=>{ n.material=e.target.value; renderPanel(); render(); });
+    wrap.querySelector('#rvel').addEventListener('input',e=>{ n.maxVelocity=e.target.value?parseFloat(e.target.value):null; renderPanel(); render(); });
+    bindRlFields(wrap, n.rl);
+  }
   // move the existing feed to a different level on this riser, without redrawing the pipe
   wrap.querySelector('#rfeedlvl').addEventListener('change',e=>{
     const lvl=parseInt(e.target.value)||0;
@@ -1793,6 +2046,59 @@ function bindRlFields(wrap, target){
     target[e.target.dataset.rl]=e.target.value; renderPanel(); render(); }));
 }
 
+// the per-riser gas overrides — same blank-means-inherit contract as rlFields, with the sheet
+// value shown greyed as the placeholder. The master workbook carries these per riser.
+function gasFields(vals, inherited){
+  const ph=k=> inherited && !blank(inherited[k]) ? String(inherited[k]) : '—';
+  const opt=(v,sel,label)=>`<option value="${escapeHtml(String(v))}" ${sel?'selected':''}>${escapeHtml(label)}</option>`;
+  return `<div class="sect">Gas sizing — overrides</div>
+    <div class="row">
+      <label>${GAS_LABELS.table}
+        <select class="field gasf" data-gas="table">
+          ${opt('', blank(vals.table), 'Use sheet default')}
+          ${gasTableKeys().map(k=>opt(k, vals.table===k, gasTableLabel(k))).join('')}
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label>${GAS_LABELS.indexLength}
+        <select class="field gasf" data-gas="indexLength">
+          ${opt('', blank(vals.indexLength), 'Use sheet default ('+ph('indexLength')+' m)')}
+          ${gasLengths().map(L=>opt(L, String(vals.indexLength)===String(L), L+' m')).join('')}
+        </select>
+      </label>
+      <label>${GAS_LABELS.demandPerDwelling}<input class="field gasf" data-gas="demandPerDwelling" type="number" step="1" min="0"
+        placeholder="${escapeHtml(ph('demandPerDwelling'))}" value="${escapeHtml(String(vals.demandPerDwelling??''))}"></label>
+    </div>
+    <div class="row">
+      <label>${GAS_LABELS.diversity}
+        <select class="field gasf" data-gas="diversity">
+          ${opt('', blank(vals.diversity), 'Use sheet default')}
+          ${opt('on', vals.diversity==='on', 'ON')}
+          ${opt('off', vals.diversity==='off', 'OFF')}
+        </select>
+      </label>
+      <label>${GAS_LABELS.tolerancePct}<input class="field gasf" data-gas="tolerancePct" type="number" step="1" min="0"
+        placeholder="${escapeHtml(ph('tolerancePct'))}" value="${escapeHtml(String(vals.tolerancePct??''))}"></label>
+    </div>
+    <p class="empty" style="margin-top:6px">Blank = inherited from the sheet (shown greyed). The tables are only tabulated at the listed index lengths, which is why it is a list and not a free number.</p>`;
+}
+function bindGasFields(wrap, target){
+  wrap.querySelectorAll('.gasf').forEach(inp=>inp.addEventListener('input',e=>{
+    target[e.target.dataset.gas]=e.target.value; renderPanel(); render(); }));
+}
+// what this riser's own load comes to, and what its base segment ends up as
+function gasRiserReadout(n){
+  const g=resolveGas(n), load=riserGasLoad(n), s=sizeGasLoad(load,g);
+  const div = load.dwellings>0 ? (g.diversity? gasDiversity(load.dwellings) : 1) : null;
+  const rows=[['Dwellings served', String(load.dwellings)]];
+  if(div!=null) rows.push(['Diversity factor', div.toFixed(3)+(g.diversity?'':' (off)')]);
+  if(load.plantLoad>0) rows.push(['Plant load', fmtMJ(load.plantLoad)+' MJ/hr']);
+  rows.push(['Adjusted demand', fmtMJ(s.mj)+' MJ/hr']);
+  rows.push(['Base size', s.dn? phi(s.dn) : (s.unsized?'—':'OVER CAPACITY')]);
+  return rows.map(([k,v])=>`<div><span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(v)}</span></div>`).join('');
+}
+
 // pump duty block — L15 (flow), M15 (pressure), N15 (elec load), J12 (max pressure in pipe)
 function pressureReadout(pr){
   const hint=t=>`<p class="empty" style="margin-top:8px">${t}</p>`;
@@ -1817,27 +2123,33 @@ function levelBadge(n,i){
   const info=riserInfo[n.id]||{feed:null,exports:{}};
   const bot=riserBotIdx(n), top=riserTopIdx(n);
   const feed=info.feed!=null?clampLevel(n,info.feed):bot;
+  const gas=isGasSheet();
   if(i<bot||i>top) return {text: i<riserStartIdx(n)?'below riser start':'—', cls:''};
-  if(i===feed) return {text:'FEED LEVEL · '+riserBaseFlow(n).toFixed(2)+' L/s total',cls:' feed'};
+  if(i===feed) return {text: gas ? 'FEED LEVEL · '+fmtMJ(sizeGasLoad(riserGasLoad(n),resolveGas(n)).mj)+' MJ/hr total'
+                                 : 'FEED LEVEL · '+riserBaseFlow(n).toFixed(2)+' L/s total', cls:' feed'};
   const segs=riserSegments(n,feed,info.exports,bot,top);
   const s= i>feed ? segs.find(x=>x.i===i-1) : segs.find(x=>x.i===i);
   if(!s) return {text:'—',cls:''};
+  if(gas) return {text:`${s.dn?phi(s.dn):'OVER'} · ${fmtMJ(s.mj)} MJ/hr · ${s.dwellings} dw`, cls: s.over?' warn':''};
   return {text:`${s.dn?phi(s.dn):'OVER'} · ${s.flow.toFixed(2)} L/s · ${isNaN(s.vel)?'–':s.vel.toFixed(2)+' m/s'}`, cls: s.over?' warn':''};
 }
 function renderLevelsEditor(n,host){
   host.innerHTML='';
-  const head=document.createElement('div'); head.className='lvl-head';
-  head.innerHTML='<div>Level</div><div>Dwell.</div><div>LU</div>';
+  const gas=isGasSheet();
+  const head=document.createElement('div'); head.className='lvl-head'+(gas?' gas':'');
+  head.innerHTML= gas ? '<div>Level</div><div>Dwell.</div><div>Plant MJ/hr</div>'
+                      : '<div>Level</div><div>Dwell.</div><div>LU</div>';
   host.appendChild(head);
   const bot=riserStartIdx(n);
   for(let i=levelCount()-1;i>=0;i--){
     const L=n.data[i];
     const below = i<bot;
-    const row=document.createElement('div'); row.className='lvl-row'+(i===state.building.groundIdx?' ground':'');
+    const row=document.createElement('div'); row.className='lvl-row'+(gas?' gas':'')+(i===state.building.groundIdx?' ground':'');
     if(below) row.style.opacity='.38';
     row.innerHTML=`<div class="lname">${escapeHtml(state.building.levels[i])}</div>
       <input type="number" min="0" value="${L.dwellings||0}" data-f="dwellings" ${below?'disabled':''}>
-      <input type="number" min="0" value="${L.lu||0}" data-f="lu" ${below?'disabled':''}>`;
+      ${gas?`<input type="number" min="0" step="1" value="${L.mj||0}" data-f="mj" ${below?'disabled':''}>`
+           :`<input type="number" min="0" value="${L.lu||0}" data-f="lu" ${below?'disabled':''}>`}`;
     row.querySelectorAll('input').forEach(inp=>{
       inp.addEventListener('input',e=>{ const f=inp.getAttribute('data-f');
         L[f]=parseFloat(e.target.value)||0;
@@ -2043,6 +2355,44 @@ function setupHotWaterFromCW(auto){
     prevAtt={node:r.id,level:top}; prevPt=q;
   });
 }
+// build the gas sheet from the cold-water risers: a street/meter entry plus mirrored gas risers,
+// each fed at its START level. Unlike hot water (fed down from a roof plant), gas comes up from
+// the meter assembly, so the chain is the bottom-fed one the cold-water setup draws.
+function setupGasFromCW(auto){
+  if(state.activeService!=='gas'){ state.activeService='gas'; syncServiceUI(); }
+  const gas=curSvc();
+  if(!auto && gas.nodes.length && !confirm('Rebuild the gas sheet from the cold-water risers? This replaces the current gas drawing.')) return;
+  pushUndo('Gas setup'); // after the confirm, before the wipe — this replaces the whole sheet
+  gas.nodes=[]; gas.pipes=[];
+  const src={id:nid(),type:'source',x:snap(160),y:snap(levelY(state.building.groundIdx)+56),name:'GAS SUPPLY'};
+  gas.nodes.push(src);
+  const cwRisers=state.services.cw.nodes.filter(n=>n.type==='riser').slice().sort((a,b)=>a.x-b.x);
+  if(cwRisers.length){
+    cwRisers.forEach(r=>{
+      const data=state.building.levels.map((_,i)=>Object.assign(blankLevel(),
+        {dwellings:(r.data&&r.data[i]?(+r.data[i].dwellings||0):0)}));
+      gas.nodes.push({id:nid(),type:'riser',x:r.x,name:(r.name||'RISER').replace(/\bCW\b/,'GAS'),
+        start:(r.start!=null?r.start:state.building.groundIdx),data,flip:r.flip,rl:blankRl(),gas:blankGas()});
+    });
+  } else {
+    const data=state.building.levels.map(()=>blankLevel());
+    for(let i=state.building.groundIdx;i<levelCount();i++) data[i].dwellings=4;
+    gas.nodes.push({id:nid(),type:'riser',x:snap(420),name:'GAS RISER 1',
+      start:state.building.groundIdx,data,rl:blankRl(),gas:blankGas()});
+  }
+  // chain supply → riser → riser at the start level, exactly as the cold-water setup does
+  let prevAtt={node:src.id}, prevPt={x:src.x,y:src.y};
+  gas.nodes.filter(n=>n.type==='riser').sort((a,b)=>a.x-b.x).forEach(r=>{
+    syncRiserData(r);
+    const att={node:r.id,level:riserStartIdx(r)}, q=attachPoint(att);
+    let pts;
+    if(prevAtt.level!=null){ const ry=Math.min(prevPt.y,q.y);
+      pts=[{...prevPt},{x:prevPt.x,y:ry},{x:q.x,y:ry},{...q}]; }
+    else pts= Math.abs(q.y-prevPt.y)<0.5 ? [{...prevPt},{...q}] : [{...prevPt},{x:q.x,y:prevPt.y},{...q}];
+    gas.pipes.push({id:nid(),pts:dedupe(pts),a:prevAtt,b:att});
+    prevAtt=att; prevPt=q;
+  });
+}
 function setMode(m){
   commitDraw(); // leaving draw mode abandons any draft — keep whatever it already committed undoable
   if(m!=='connect') cancelConnect(); // any mode change abandons a pending connect pick
@@ -2076,24 +2426,53 @@ function syncPressureBtn(){
 }
 presBtn.addEventListener('click',()=>{ state.settings.showPressure=!state.settings.showPressure; render(); });
 
-// ---- service (sheet) switching: Cold water ⇄ Hot water ----
+// ---- service (sheet) switching: Cold water ⇄ Hot water ⇄ Gas ----
 function syncServiceUI(){
   document.querySelectorAll('[data-svc]').forEach(b=>b.classList.toggle('active', b.getAttribute('data-svc')===state.activeService));
-  const hw = state.activeService==='hw';
-  document.documentElement.classList.toggle('svc-hw', hw); // hot-water sheet renders red (see :root.svc-hw)
+  const hw = state.activeService==='hw', gas = state.activeService==='gas';
+  document.documentElement.classList.toggle('svc-hw', hw);   // hot-water sheet renders red (see :root.svc-hw)
+  document.documentElement.classList.toggle('svc-gas', gas); // gas sheet renders ochre
   const show=(sel,on)=>{ const e=document.querySelector(sel); if(e) e.style.display=on?'':'none'; };
   show('[data-add="source"]', !hw); show('[data-add="plant"]', hw); show('#btn-hwsetup', hw);
-  show('[data-add="hwu"]', !hw); // the HWU is the cold sheet's view of the plant, so cold-only
-  const sub=document.querySelector('.brand span'); if(sub) sub.textContent = hw ? 'Hot Water · Pipe Sizer' : 'Cold Water · Pipe Sizer';
+  show('[data-add="hwu"]', !hw && !gas); // the HWU is the cold sheet's view of the plant, so cold-only
+  show('#btn-gassetup', gas);
+  // gas sizes off the AS 5601 tables, so the material/velocity group and the water static-pressure
+  // engine have nothing to say on that sheet
+  show('#grp-water', !gas); show('#grp-gas', gas);
+  const sub=document.querySelector('.brand span');
+  if(sub) sub.textContent = gas? 'Gas · Pipe Sizer' : hw ? 'Hot Water · Pipe Sizer' : 'Cold Water · Pipe Sizer';
+  if(gas) syncGasToolbar();
 }
 function switchService(to){
   if(!state.services[to] || to===state.activeService) return;
   ui.draft=null; ui.filletFirst=null;
   state.activeService=to;
   if(to==='hw' && curSvc().nodes.length===0 && state.services.cw.nodes.some(n=>n.type==='riser')) setupHotWaterFromCW(true);
+  if(to==='gas' && curSvc().nodes.length===0 && state.services.cw.nodes.some(n=>n.type==='riser')) setupGasFromCW(true);
   matSel.value=curSvc().network.material; velInp.value=curSvc().network.maxVelocity;
   setMode('select'); selectNone(); syncServiceUI(); render(); fitView();
 }
+
+// ---- the gas toolbar group: the sheet-wide FRONT PAGE gas inputs ----
+const gasTableSel=document.getElementById('gas-table'), gasIndexSel=document.getElementById('gas-index'),
+      gasPerDwInp=document.getElementById('gas-perdw'), gasDivBtn=document.getElementById('btn-gas-div');
+gasTableKeys().forEach(k=>{ const o=document.createElement('option');
+  o.value=k; o.textContent=gasTableLabel(k); gasTableSel.appendChild(o); });
+gasLengths().forEach(L=>{ const o=document.createElement('option');
+  o.value=L; o.textContent=L+' m'; gasIndexSel.appendChild(o); });
+function syncGasToolbar(){
+  const g=supplyGas();
+  gasTableSel.value=g.table; gasIndexSel.value=g.indexLength; gasPerDwInp.value=g.demandPerDwelling;
+  gasDivBtn.classList.toggle('active', !!g.diversity);
+  gasDivBtn.title = (g.diversity?'Diversity ON':'Diversity OFF')+
+    ' — the workbook applies it to the cumulative dwelling count (GAS DATA!F9:G88)';
+}
+gasTableSel.addEventListener('change',()=>{ pushUndo('gas table'); supplyGas().table=gasTableSel.value; renderPanel(); render(); });
+gasIndexSel.addEventListener('change',()=>{ pushUndo('gas index length'); supplyGas().indexLength=+gasIndexSel.value; renderPanel(); render(); });
+gasPerDwInp.addEventListener('input',()=>{ const v=parseFloat(gasPerDwInp.value);
+  if(v>=0){ supplyGas().demandPerDwelling=v; renderPanel(); render(); }});
+gasDivBtn.addEventListener('click',()=>{ pushUndo('gas diversity'); const g=supplyGas();
+  g.diversity=!g.diversity; syncGasToolbar(); renderPanel(); render(); });
 document.querySelectorAll('[data-svc]').forEach(b=>b.addEventListener('click',()=>switchService(b.getAttribute('data-svc'))));
 
 function updateHint(){
@@ -2133,7 +2512,7 @@ document.getElementById('btn-pdf').addEventListener('click',printSchematic);
 
 // ====================== save / load ======================
 document.getElementById('btn-save').addEventListener('click',()=>{
-  const data=JSON.stringify({version:5,building:state.building,settings:state.settings,activeService:state.activeService,services:state.services,nextId:state.nextId},null,2);
+  const data=JSON.stringify({version:6,building:state.building,settings:state.settings,activeService:state.activeService,services:state.services,nextId:state.nextId},null,2);
   const blob=new Blob([data],{type:'application/json'}); const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
   const jn=(state.building.job&&state.building.job.number)||'gfb_schematic';
@@ -2161,9 +2540,11 @@ function loadState(d){
   };
   if(!services.cw) services.cw={network:{material:'copper_type_b',maxVelocity:DEFAULT_MAX_VEL},nodes:[],pipes:[]};
   if(!services.hw) services.hw={network:{material:'copper_type_b',maxVelocity:1.2},nodes:[],pipes:[]};
+  if(!services.gas) services.gas={network:{material:'copper_type_b',maxVelocity:DEFAULT_MAX_VEL},nodes:[],pipes:[]}; // absent before v6
   Object.keys(services).forEach(k=>{ const s=services[k];
     if(!s.network) s.network={material:'copper_type_b',maxVelocity:k==='hw'?1.2:DEFAULT_MAX_VEL};
     s.network.supply=Object.assign(blankRl(), s.network.supply||{}); // absent before v5
+    if(k==='gas') s.network.gas=Object.assign({}, GAS_DEFAULTS, s.network.gas||{}); // absent before v6
     if(!Array.isArray(s.nodes)) s.nodes=[]; if(!Array.isArray(s.pipes)) s.pipes=[]; });
   // v1 fallback: risers carried their own named levels
   if(!building){
@@ -2182,9 +2563,11 @@ function loadState(d){
       if(n.type!=='riser') return;
       if(!Array.isArray(n.data)) n.data=(n.levels||[]).map(x=>({dwellings:+x.dwellings||0,lu:+x.lu||0,extra:+x.extra||0,pump:+x.pump||0}));
       delete n.levels; delete n.y;
+      n.data.forEach(L=>{ if(L && L.mj==null) L.mj=0; }); // gas plant load: absent before v6
       syncRiserData(n);
       if(n.start==null){ let s=null; for(let i=0;i<n.data.length;i++){ if(levelHasDemand(n.data[i])){ s=i; break; } } n.start = s!=null? s : state.building.groundIdx; }
       n.rl = Object.assign(blankRl(), n.rl||{}); // v1-v4 risers carry no R.L.s
+      if(key==='gas') n.gas = Object.assign(blankGas(), n.gas||{}); // v1-v5 risers carry no gas overrides
     });
     // v1/v2 pipes were {a: nodeId, b: nodeId} — convert to attached polylines
     svc.pipes=svc.pipes.filter(p=>p&&(p.pts||typeof p.a==='number')).map(p=>{
@@ -2331,6 +2714,9 @@ document.getElementById('s-start').addEventListener('click',()=>{
 document.getElementById('btn-setup').addEventListener('click',()=>{
   if(curSvc().nodes.length===0 || confirm('Job setup starts a NEW drawing (current canvas is replaced — Save first if you need it). Continue?'))
     openSetup(true);
+});
+document.getElementById('btn-gassetup').addEventListener('click',()=>{
+  setupGasFromCW(false); setMode('select'); selectNone(); syncServiceUI(); render(); fitView();
 });
 document.getElementById('btn-hwsetup').addEventListener('click',()=>{
   setupHotWaterFromCW(false);
