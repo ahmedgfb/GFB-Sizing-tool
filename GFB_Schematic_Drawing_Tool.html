@@ -1509,7 +1509,11 @@ window.addEventListener('mousemove',e=>{
 window.addEventListener('mouseup',e=>{
   if(ui.pan && (e.button===1||e.button===2)){ ui.pan=null; return; }
   if(ui.drag){
-    if(ui.drag.moved) commitSnap(dragSnap,'move '+((getNode(ui.drag.id)||{}).type||'node'));
+    // moving the hot-water plant carries its gas copy along, unless that copy has been placed by
+    // hand on the gas sheet — see syncGasPlants
+    const dragged=getNode(ui.drag.id);
+    if(ui.drag.moved && dragged && dragged.type==='plant') syncGasPlants();
+    if(ui.drag.moved) commitSnap(dragSnap,'move '+((dragged||{}).type||'node'));
     else selectNode_(ui.drag.id);
     dragSnap=null; ui.drag=null; render();
   }
@@ -1886,10 +1890,19 @@ function remapAttachLevels(fn){
   allServiceSlices().forEach(s=>s.pipes.forEach(p=>{ [p.a,p.b].forEach(att=>{ if(att&&att.level!=null) att.level=fn(att.level); }); }));
 }
 
+// The plant a panel edit should actually write to. A gas-sheet mirror is the same physical plant
+// as its hot-water node, so name / configuration / load are written THROUGH to that node and
+// syncGasPlants() copies them back. Editing the mirror directly would just be reverted by the
+// next sync, which would look like the field refusing to take a value.
+function plantEditTarget(n){
+  if(n.linkedTo==null) return n;
+  return (state.services.hw.nodes||[]).find(x=>x.id===n.linkedTo) || n;
+}
 function renderPlantPanel(n,body){
   if(!n.plantType) n.plantType='gas_central';
   const gasSheet=isGasSheet();
   const isElec=String(n.plantType||'').indexOf('elec')===0;
+  const tgt=plantEditTarget(n), linked=tgt!==n;
   const wrap=document.createElement('div');
   wrap.innerHTML=`<div class="row"><label>Plant name<input class="field" id="pname" value="${escapeHtml(n.name||'')}"></label></div>
     <div class="row"><label>Configuration
@@ -1901,6 +1914,7 @@ function renderPlantPanel(n,body){
       </select></label></div>
     <div class="row"><label>Gas load (MJ/hr)<input class="field" id="pgas" type="number" min="0" value="${n.gasLoad||0}"></label></div>
     ${gasSheet ? `
+    ${linked ? '<p class="empty" style="margin-top:6px">🔗 The same plant as the one on the hot-water sheet — name, configuration and load are shared, and editing either sheet changes both.</p>' : ''}
     ${isElec ? '<p class="empty warn" style="margin-top:6px">⚠ This plant is set to <b>Electric</b>, so it draws no gas. Either change the configuration above or take it off the gas sheet.</p>' : ''}
     <p class="empty" style="margin-top:6px">On this sheet the plant is a <b>load</b>, not a supply: draw the gas main (<kbd>L</kbd>) into it and every run upstream picks up its MJ/hr. The load is added <b>after</b> diversity — plant is a firm demand, so the dwelling curve never discounts it.</p>
     <div class="sect">On the gas network</div>
@@ -1912,14 +1926,17 @@ function renderPlantPanel(n,body){
     <p class="empty" style="margin-top:8px">These feed every riser on the hot-water sheet; each riser can override them. Kept separate from the cold-water sheet's supply values.</p>`}
     <button class="tool" style="margin-top:8px;width:100%;justify-content:center" id="delp">🗑 Delete plant</button>`;
   body.appendChild(wrap);
-  wrap.querySelector('#pname').addEventListener('input',e=>{ n.name=e.target.value; document.getElementById('p-title').textContent=n.name; render(); });
+  wrap.querySelector('#pname').addEventListener('input',e=>{ tgt.name=e.target.value;
+    document.getElementById('p-title').textContent=tgt.name; syncGasPlants(); render(); });
   if(!gasSheet) bindRlFields(wrap, supplyRl());
   const ps=wrap.querySelector('#ptype'); ps.value=n.plantType;
-  ps.addEventListener('change',e=>{ n.plantType=e.target.value; renderPanel(); render(); });
+  // picking a Gas configuration here is what puts the plant on the gas sheet — no rebuild needed
+  ps.addEventListener('change',e=>{ tgt.plantType=e.target.value; syncGasPlants(); renderPanel(); render(); });
   // render() matters here: on the gas sheet this number sizes every run upstream of the plant.
   // renderPanel() is deliberately NOT called — it would wipe the field mid-keystroke.
   wrap.querySelector('#pgas').addEventListener('input',e=>{
-    n.gasLoad=parseFloat(e.target.value)||0;
+    tgt.gasLoad=parseFloat(e.target.value)||0;
+    syncGasPlants();
     render();
     const out=wrap.querySelector('#gasplantout'); if(out) out.innerHTML=gasPlantReadout(n,true);
   });
@@ -2457,6 +2474,58 @@ function setupHotWaterFromCW(auto){
     prevAtt={node:r.id,level:top}; prevPt=q;
   });
 }
+// A gas-fired hot-water plant is ONE physical thing that belongs on two sheets: the source of the
+// hot-water network, and a load on the gas network. The gas copy is a mirror tied to the
+// hot-water node by `linkedTo`, so choosing a Gas configuration on the hot-water sheet is all it
+// takes for the plant to appear on the gas sheet, in the same place.
+//
+// Called whenever the hot-water plant is edited and on the way into the gas sheet. Deliberately
+// NOT called from render() or syncServiceUI(): those also run during undo, and resurrecting a
+// node someone just undid is worse than a slightly stale mirror.
+function syncGasPlants(){
+  if(restoring) return false;
+  const hw=state.services.hw, gas=state.services.gas;
+  if(!hw||!gas) return false;
+  const isGasFired=n=>String(n.plantType||'').indexOf('gas')===0;
+  const wired=id=>gas.pipes.some(p=>(p.a&&p.a.node===id)||(p.b&&p.b.node===id));
+  let changed=false;
+
+  hw.nodes.filter(n=>n.type==='plant').forEach(src=>{
+    let mirror=gas.nodes.find(n=>n.type==='plant'&&n.linkedTo===src.id);
+    if(isGasFired(src)){
+      if(!mirror){
+        // same coordinates as the hot-water sheet: the plant is in one place in the building, and
+        // the two schematics share their geometry, so it reads as the same object on both
+        mirror={id:nid(),type:'plant',linkedTo:src.id,x:src.x,y:src.y,
+          name:src.name||'HW PLANT',plantType:src.plantType,gasLoad:+src.gasLoad||0,
+          syncedX:src.x,syncedY:src.y};
+        gas.nodes.push(mirror); changed=true;
+      }
+      if(mirror.name!==src.name||mirror.plantType!==src.plantType||mirror.gasLoad!==(+src.gasLoad||0)){
+        mirror.name=src.name; mirror.plantType=src.plantType; mirror.gasLoad=+src.gasLoad||0; changed=true;
+      }
+      // position follows as well — but only until someone drags the gas copy somewhere of its own,
+      // after which it is theirs and the mirror stops moving it
+      if(mirror.x===mirror.syncedX && mirror.y===mirror.syncedY && (mirror.x!==src.x||mirror.y!==src.y)){
+        mirror.x=src.x; mirror.y=src.y; mirror.syncedX=src.x; mirror.syncedY=src.y; changed=true;
+      }
+    } else if(mirror){
+      // no longer gas-fired. Drop the mirror only while nothing is drawn to it: deleting someone's
+      // pipework behind their back is worse than leaving a box its own panel flags as electric.
+      if(!wired(mirror.id)){ gas.nodes=gas.nodes.filter(n=>n.id!==mirror.id); changed=true; }
+      else if(mirror.plantType!==src.plantType){ mirror.plantType=src.plantType; changed=true; }
+    }
+  });
+
+  // the hot-water plant itself was deleted
+  gas.nodes.filter(n=>n.type==='plant'&&n.linkedTo!=null).slice().forEach(m=>{
+    if(hw.nodes.some(n=>n.id===m.linkedTo)) return;
+    if(wired(m.id)) { delete m.linkedTo; changed=true; }        // keep the drawing, cut the link
+    else { gas.nodes=gas.nodes.filter(n=>n.id!==m.id); changed=true; }
+  });
+  return changed;
+}
+
 // build the gas sheet from the cold-water risers: a street/meter entry plus mirrored gas risers,
 // each fed at its START level. Unlike hot water (fed down from a roof plant), gas comes up from
 // the meter assembly, so the chain is the bottom-fed one the cold-water setup draws.
@@ -2494,20 +2563,7 @@ function setupGasFromCW(auto){
     gas.pipes.push({id:nid(),pts:dedupe(pts),a:prevAtt,b:att});
     prevAtt=att; prevPt=q;
   });
-  // A gas-fired hot-water plant is a gas load, so bring it onto this sheet with its MJ/hr and run
-  // the riser up to it. Electric plant is skipped — there is nothing for it to do here.
-  const hwPlant=(state.services.hw.nodes||[]).find(n=>n.type==='plant'
-    && String(n.plantType||'').indexOf('gas')===0 && (+n.gasLoad||0)>0);
-  const risers=gas.nodes.filter(n=>n.type==='riser').sort((a,b)=>a.x-b.x);
-  if(hwPlant && risers.length){
-    const host=risers[risers.length-1];
-    const plant={id:nid(),type:'plant',x:host.x,y:snap(SHEET_TOP-14),
-      name:hwPlant.name||'HW PLANT', plantType:hwPlant.plantType, gasLoad:+hwPlant.gasLoad||0};
-    gas.nodes.push(plant);
-    const att={node:host.id,level:riserTopIdx(host)}, q=attachPoint(att);
-    gas.pipes.push({id:nid(),pts:dedupe([{x:plant.x,y:plant.y+30},{x:q.x,y:q.y}]),
-      a:{node:plant.id}, b:att});
-  }
+  syncGasPlants(); // a gas-fired hot-water plant belongs on this sheet too
 }
 function setMode(m){
   commitDraw(); // leaving draw mode abandons any draft — keep whatever it already committed undoable
@@ -2567,6 +2623,7 @@ function switchService(to){
   state.activeService=to;
   if(to==='hw' && curSvc().nodes.length===0 && state.services.cw.nodes.some(n=>n.type==='riser')) setupHotWaterFromCW(true);
   if(to==='gas' && curSvc().nodes.length===0 && state.services.cw.nodes.some(n=>n.type==='riser')) setupGasFromCW(true);
+  if(to==='gas') syncGasPlants(); // pick up anything switched to Gas since we were last here
   matSel.value=curSvc().network.material; velInp.value=curSvc().network.maxVelocity;
   setMode('select'); selectNone(); syncServiceUI(); render(); fitView();
 }
@@ -2701,6 +2758,7 @@ function loadState(d){
   state.activeService = (d.activeService && services[d.activeService]) ? d.activeService : 'cw';
   let maxId=0; Object.keys(services).forEach(k=>{ services[k].nodes.forEach(n=>maxId=Math.max(maxId,n.id||0)); services[k].pipes.forEach(p=>maxId=Math.max(maxId,p.id||0)); });
   state.nextId = d.nextId || (maxId+1);
+  syncGasPlants(); // v1-v6 files predate the mirror; a gas-fired plant gets its gas copy on load
   matSel.value=curSvc().network.material; velInp.value=curSvc().network.maxVelocity;
   document.getElementById('setup').classList.add('hidden');
   setMode('select'); selectNone(); syncServiceUI(); fitView();

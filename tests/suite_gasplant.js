@@ -20,19 +20,29 @@ plant.plantType='gas_central'; plant.gasLoad=2200;
 ok('plant is still a SOURCE on the hot-water sheet', sizePipes()[curSvc().pipes[0].id].unsized, false);
 ok('hot water still sizes in L/s', sizePipes()[curSvc().pipes[0].id].flow > 0, true);
 
-note('--- the gas sheet picks it up on auto-build ---');
+note('--- the gas sheet picks it up, in the SAME position ---');
+var hwx=plant.x, hwy=plant.y;
 switchService('gas');
 var gs=curSvc();
 var gplant=gs.nodes.filter(function(n){return n.type==='plant';})[0];
 ok('gas sheet got the plant', !!gplant, true);
+ok('same x as the hot-water sheet', gplant.x, hwx);
+ok('same y as the hot-water sheet', gplant.y, hwy);
 ok('with its load', gplant.gasLoad, 2200);
 ok('and its configuration', gplant.plantType, 'gas_central');
-ok('it is connected, not floating', gs.pipes.filter(function(p){
-  return (p.a&&p.a.node===gplant.id)||(p.b&&p.b.node===gplant.id); }).length, 1);
+ok('linked back to the hot-water node', gplant.linkedTo, plant.id);
+ok('it arrives unconnected: the gas run is for the designer to draw',
+   gs.pipes.filter(function(p){
+     return (p.a&&p.a.node===gplant.id)||(p.b&&p.b.node===gplant.id); }).length, 0);
+
+note('--- draw the gas main into it, the way a user would ---');
+var riser=allRisers()[0];
+var topAtt={node:riser.id,level:riserTopIdx(riser)}, tq=attachPoint(topAtt);
+gs.pipes.push({id:nid(),pts:dedupe([{x:gplant.x,y:gplant.y+30},{x:gplant.x,y:tq.y},{x:tq.x,y:tq.y}]),
+  a:{node:gplant.id}, b:topAtt});
 
 note('--- on gas the plant is a LOAD, so the run into it is sized and not a phantom source ---');
 var res=sizePipes();
-var riser=allRisers()[0];
 var feedPipe=null, plantPipe=null;
 gs.pipes.forEach(function(p){
   if((p.a&&p.a.node===gplant.id)||(p.b&&p.b.node===gplant.id)) plantPipe=p;
@@ -120,3 +130,65 @@ ok('hot-water button label restored',
 document.querySelector('[data-add="plant"]').click();
 ok('named for the hot-water sheet', curSvc().nodes.filter(function(n){return n.type==='plant';}).pop().name, 'HW PLANT');
 deleteSelected();
+
+note('=== choosing "Gas" on the hot-water sheet is what creates the gas copy ===');
+switchService('hw');
+var hp=curSvc().nodes.filter(function(n){return n.type==='plant';})[0];
+selectNode_(hp.id);
+// start from electric with nothing on the gas sheet
+document.querySelector('#ptype').value='elec_central';
+document.querySelector('#ptype').dispatchEvent(new Event('change',{bubbles:true}));
+switchService('gas');
+curSvc().pipes=curSvc().pipes.filter(function(p){    // unwire so the mirror can be dropped
+  var m=curSvc().nodes.filter(function(n){return n.type==='plant';})[0];
+  return !m || !((p.a&&p.a.node===m.id)||(p.b&&p.b.node===m.id));
+});
+syncGasPlants();
+ok('electric plant: no gas copy', curSvc().nodes.filter(function(n){return n.type==='plant';}).length, 0);
+
+switchService('hw');
+selectNode_(hp.id);
+document.querySelector('#ptype').value='gas_central';
+document.querySelector('#ptype').dispatchEvent(new Event('change',{bubbles:true}));
+ok('picking Gas creates the copy immediately, without leaving the sheet',
+   state.services.gas.nodes.filter(function(n){return n.type==='plant';}).length, 1);
+var mir=state.services.gas.nodes.filter(function(n){return n.type==='plant';})[0];
+ok('at the hot-water plant position', mir.x+','+mir.y, hp.x+','+hp.y);
+ok('and it is a gas load with no dwellings', mir.linkedTo, hp.id);
+
+note('--- a load typed on the hot-water sheet reaches the gas sheet ---');
+var gf=document.querySelector('#pgas');
+gf.value='4500'; gf.dispatchEvent(new Event('input',{bubbles:true}));
+ok('load written through', mir.gasLoad, 4500);
+var nf=document.querySelector('#pname');
+nf.value='ROOF BOILERS'; nf.dispatchEvent(new Event('input',{bubbles:true}));
+ok('name written through', mir.name, 'ROOF BOILERS');
+
+note('--- moving the plant on the hot-water sheet moves the gas copy ---');
+hp.x=hp.x+120; syncGasPlants();
+ok('the copy followed', mir.x, hp.x);
+
+note('--- until the gas copy is placed by hand, after which it stays put ---');
+mir.x=999; mir.y=111;              // as a drag would leave it
+hp.x=hp.x+200; syncGasPlants();
+ok('hand-placed copy is not yanked back', mir.x, 999);
+ok('but it still shares the load', (function(){ hp.gasLoad=7777; syncGasPlants(); return mir.gasLoad; })(), 7777);
+
+note('--- deleting the hot-water plant ---');
+state.services.hw.nodes=state.services.hw.nodes.filter(function(n){return n.id!==hp.id;});
+syncGasPlants();
+ok('an unwired copy goes with it', state.services.gas.nodes.filter(function(n){return n.type==='plant';}).length, 0);
+
+note('--- a wired copy survives instead of silently deleting drawn pipework ---');
+switchService('hw');
+var hp2={id:nid(),type:'plant',x:200,y:60,name:'HW PLANT 2',plantType:'gas_central',gasLoad:1000};
+state.services.hw.nodes.push(hp2);
+syncGasPlants();
+var mir2=state.services.gas.nodes.filter(function(n){return n.type==='plant';})[0];
+ok('copy created', !!mir2, true);
+state.services.gas.pipes.push({id:nid(),pts:[{x:0,y:0},{x:10,y:10}],a:{node:mir2.id},b:null});
+state.services.hw.nodes=state.services.hw.nodes.filter(function(n){return n.id!==hp2.id;});
+syncGasPlants();
+var still=state.services.gas.nodes.filter(function(n){return n.type==='plant';})[0];
+ok('wired copy kept', !!still, true);
+ok('but no longer linked to anything', still.linkedTo, undefined);

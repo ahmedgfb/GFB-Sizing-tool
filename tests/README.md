@@ -15,7 +15,7 @@ the **real** `GFB_Schematic_Drawing_Tool.html` in a headless browser, injects it
 | `suite_gas.js` | 61 assertions. The gas engine against the workbook: diversity curve, capacity lookups, `GAS CALCS` columns G/H, the `MAIN PIPE` sheet, per-riser overrides, save/load v5→v6, and the guard that diversified loads are never summed. |
 | `suite_ui.js` | 48 assertions. Sheet switching, the gas auto-build, the drawing, every panel, the toolbar, undo/redo, PDF naming — and that the cold sheet is untouched by all of it. |
 | `suite_perriser.js` | 23 assertions. Per-riser demand/dwelling: the override survives typing (no focus loss), and a main serving risers at different MJ/hr blends them instead of applying one sheet-wide rate. |
-| `suite_gasplant.js` | 36 assertions. The plant box on both sheets: a source on hot water, a load on gas; auto-carried across when gas-fired; the graphic, the panel, and that an electric plant contributes nothing. |
+| `suite_gasplant.js` | 52 assertions. The plant box on both sheets: a source on hot water, a load on gas; mirrored onto the gas sheet the moment a Gas configuration is picked, at the same position, with shared name/load and the drag, delete and unlink rules; the graphic, the panel, and that an electric plant contributes nothing. |
 | `suite_water_regression.js` | Prints every number the cold and hot sheets produce. Not pass/fail on its own: `run_all.py` runs it against `HEAD`'s tool and the working copy and requires the output to be identical. |
 | `extract_gas_data.py` | Regenerates the embedded gas tables from the workbook. They were never retyped. |
 

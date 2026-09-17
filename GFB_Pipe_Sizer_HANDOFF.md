@@ -173,9 +173,30 @@ every run beyond it would size off a supply that does not exist.
 
 Draw the gas main (`L`) into the plant and every run upstream picks up its MJ/hr. The load is
 added **after** diversity — plant is a firm demand and the dwelling curve must never discount it.
-Switching to an empty gas sheet carries a **gas-fired** hot-water plant across automatically, with
-its load and configuration, connected to the tallest riser's top level. Electric plant is skipped,
-and an electric plant sitting on the gas sheet is flagged in its panel.
+
+**The gas copy appears by itself.** Set a hot-water plant's configuration to **Gas · Central** or
+**Gas · Individual** and it shows up on the gas sheet immediately, at the *same coordinates* — the
+two schematics share their geometry, so the plant reads as one object in one place in the building.
+No rebuild, and it does not wait for a load to be typed.
+
+`syncGasPlants()` maintains it. The copy carries `linkedTo` (the hot-water node's id) and:
+
+- **Name, configuration and load are shared both ways.** Editing them on either sheet writes to the
+  hot-water node and syncs back, so the gas load can be typed where you are actually sizing gas.
+  Editing the copy directly would just be reverted on the next sync, which reads as a field
+  refusing to take a value.
+- **Position follows** the hot-water plant — until the copy is dragged on the gas sheet, after
+  which it is yours and the mirror stops moving it (tracked by `syncedX`/`syncedY`).
+- **Switching to Electric, or deleting the plant, removes the copy** — but only while nothing is
+  drawn to it. If there is pipework attached it stays put (unlinked, and flagged as electric in its
+  panel); silently deleting someone's drawn runs is worse than a box that explains itself.
+- The copy arrives **unconnected**: it sits where the plant sits and the gas run into it is yours
+  to draw, since any route the tool guessed would usually be wrong.
+
+It is called from the plant panel's handlers, the end of a plant drag, entry to the gas sheet, and
+`loadState` (so older files gain the copy). Deliberately **not** from `render()` or
+`syncServiceUI()`, which also run during undo — resurrecting a node someone just undid is worse
+than a briefly stale mirror; `syncGasPlants()` no-ops while `restoring`.
 
 There are two ways to put plant load on the sheet, and both are legitimate: this plant box, or the
 **Plant MJ/hr** column on a riser's level table for something that hangs off that level. They add
@@ -351,7 +372,7 @@ deviation.
 **There is now a test folder, and it is committed.**
 
 ```
-py tests/run_all.py                # 168 assertions + the water regression diff
+py tests/run_all.py                # 184 assertions + the water regression diff
 py verify_against_workbook.py      # the reference data, against the workbook
 ```
 
@@ -444,7 +465,8 @@ which draws perfectly and undersizes the main.
   `MAIN PIPE` sheet. Save format v6. Committed a `tests/` folder (109 assertions + a water
   regression diff) and extended `verify_against_workbook.py` with five gas checks. Demand per
   dwelling is per riser, and mains serving risers at different rates blend them correctly. A
-  gas-fired HW plant can be shown on the gas sheet, where it is a load rather than a source. Fixed that
+  gas-fired HW plant appears on the gas sheet automatically, in the same position, where it is a
+  load rather than a source. Fixed that
   script's sheet and row lookups, which had been silently reading the wrong cells since the master
   gained an `RCW CALCS` sheet. Cold and hot water provably unchanged.
 - **2026-08-19 — HWU on the cold sheet** (`5b634b6`). Central `hwu` terminal node (config, model,
