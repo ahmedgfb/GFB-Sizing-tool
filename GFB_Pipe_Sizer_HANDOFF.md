@@ -1,6 +1,6 @@
 # GFB Pipe Sizer — Handoff
 
-_Last updated: 2026-09-16 · covers the gas schematic, on top of `5b634b6`_
+_Last updated: 2026-09-17 · covers the gas schematic, on top of `5b634b6`_
 
 A tool to draw building-services riser schematics and calculate pipe sizes, built from the logic in
 GFB's residential pipe-sizing spreadsheet. The schematic style is modelled on GFB's issued drawing
@@ -134,6 +134,27 @@ The sheet-wide inputs sit in the toolbar (the workbook's FRONT PAGE gas block): 
 36 lengths the tables are tabulated at, because the workbook's `MATCH(...,0)` is an exact match
 and anything else sizes as `-`. Each riser can override any of them — blank means inherit, shown
 greyed, the same contract as material / velocity / the R.L. fields.
+
+### Demand per dwelling is per riser, and mains blend correctly
+
+A building rarely runs one appliance load throughout, so **Demand / dwelling (MJ/hr)** on the riser
+panel overrides the sheet for that riser alone. The riser readout says which is in force —
+`40 MJ/hr (sheet)` or `60 MJ/hr (this riser)`.
+
+The important part is what happens **upstream**. A gas load is carried as
+`{dwellings, demand, plantLoad}`, where `demand` is already multiplied by *each riser's own rate*
+at that riser. So a main serving a 24-dwelling riser at 40 and an 18-dwelling riser at 60 carries
+`24×40 + 18×60 = 2040` MJ/hr undiversified, and the diversity factor is still picked from the
+combined head count of 42 — 514 MJ/hr, not the 423 a single sheet-wide 40 would give. `dwellings`
+exists only to choose the diversity factor; never multiply it by a rate upstream of a riser.
+
+Loads also carry a `mixed` flag, set when two sub-loads with different rates are added. It affects
+nothing in the sizing — it is only so the pipe panel can say **blended** rather than quote a rate
+no riser actually uses. When every riser is on one rate, all of this reduces exactly to the
+workbook's `MAIN PIPE` sheet, which is what `tests/suite_perriser.js` asserts.
+
+> Rate is per riser, matching the workbook (its column D is a single `$D$4` per riser block). It is
+> **not** per level — a commercial ground floor at a different rate would need a new field.
 
 > **Diversity is applied once, to the cumulative dwelling count, and diversified loads are never
 > added.** The curve is steeply non-linear (1 dwelling → 1.00, 67 → 0.203, 80+ → 0.195), so
@@ -291,6 +312,10 @@ deviation.
 - **Gas mains serving more than one riser** — the arithmetic is the `MAIN PIPE` sheet's (one
   diversity factor on the total dwelling count) and is tested, but GFB runs one workbook per riser,
   so a multi-riser gas main has no single sheet to compare against.
+- **Gas mains blending different demand/dwelling rates** — `Σ(dwellings × that riser's rate)` with
+  diversity from the combined head count. It reduces to the workbook whenever one rate is in play,
+  but the workbook cannot express more than one, so the mixed case is our generalisation. Spot-check
+  the first job that uses it.
 - **Gas index length** — the tool asks for it; it does not compute it from the drawing. The number
   is still the designer's, exactly as in the workbook.
 
@@ -301,7 +326,7 @@ deviation.
 **There is now a test folder, and it is committed.**
 
 ```
-py tests/run_all.py                # 109 assertions + the water regression diff
+py tests/run_all.py                # 132 assertions + the water regression diff
 py verify_against_workbook.py      # the reference data, against the workbook
 ```
 
@@ -351,7 +376,9 @@ which draws perfectly and undersizes the main.
   connect picker puts feeds at sane levels.
 - R.L. fields lose keyboard focus after each character: `bindRlFields` calls `renderPanel()` on every
   keystroke and `renderPanel` does `body.innerHTML=''`. The per-level dwellings/LU inputs deliberately
-  avoid this (they skip `renderPanel`); the R.L. fields were never given the same treatment.
+  avoid this (they skip `renderPanel`), and **the gas override fields now do too** — `bindGasFields`
+  re-renders the drawing plus the `#gasout` readout and the level badges, never the whole panel.
+  The R.L. fields are the last ones left with the defect; the fix is the same shape.
 - **Gas:** one index length per sheet (overridable per riser), entered rather than measured — the
   tables are only tabulated at 36 lengths, so it is a dropdown. A run whose real effective length
   differs materially from the sheet's index length is not separately accounted for, exactly as in
@@ -387,10 +414,11 @@ which draws perfectly and undersizes the main.
 
 ## Change log
 
-- **2026-09-16 — Gas schematic.** Third sheet, sized from AS 5601-2022 tables F.12/F.13/F.24/F.25
+- **2026-09-17 — Gas schematic.** Third sheet, sized from AS 5601-2022 tables F.12/F.13/F.24/F.25
   with the workbook's diversity curve; mirrors `GAS CALCS` for all 61 published rows and the
   `MAIN PIPE` sheet. Save format v6. Committed a `tests/` folder (109 assertions + a water
-  regression diff) and extended `verify_against_workbook.py` with five gas checks. Fixed that
+  regression diff) and extended `verify_against_workbook.py` with five gas checks. Demand per
+  dwelling is per riser, and mains serving risers at different rates blend them correctly. Fixed that
   script's sheet and row lookups, which had been silently reading the wrong cells since the master
   gained an `RCW CALCS` sheet. Cold and hot water provably unchanged.
 - **2026-08-19 — HWU on the cold sheet** (`5b634b6`). Central `hwu` terminal node (config, model,

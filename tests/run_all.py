@@ -19,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 TOOL = "GFB_Schematic_Drawing_Tool.html"
 
-SUITES = ["suite_gas.js", "suite_ui.js"]
+SUITES = ["suite_gas.js", "suite_ui.js", "suite_perriser.js"]
 
 
 def read(name):

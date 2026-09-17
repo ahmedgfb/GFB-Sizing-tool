@@ -402,6 +402,16 @@ function gasAdjusted(dwellings, perDwelling, diversityOn, plantLoad){
   const f = diversityOn ? gasDiversity(dw) : 1;
   return dw*per*(f==null?1:f) + plant;
 }
+// The same column G for a load that may have come from several risers at different MJ/hr per
+// dwelling: diversity still keys off the combined dwelling count, while the undiversified demand
+// keeps each riser's own rate. Identical to gasAdjusted() whenever a single rate is in play,
+// which is the only case the workbook can express.
+function gasAdjustedLoad(load, diversityOn){
+  const dw=+load.dwellings||0;
+  if(dw<=0) return +load.plantLoad||0;
+  const f = diversityOn ? gasDiversity(dw) : 1;
+  return (+load.demand||0)*(f==null?1:f) + (+load.plantLoad||0);
+}
 // GAS CALCS H applies FRONT PAGE B15 as a percentage margin before the table lookup.
 function gasTolerance(pct){ const p=+pct; return 1 + ((isNaN(p)? GAS_DEFAULTS.tolerancePct : p)/100); }
 
@@ -538,17 +548,38 @@ function riserBaseFlow(node){
 }
 // The gas analogue of riserBaseFlow. It deliberately returns the RAW ingredients rather than a
 // demand: diversity is non-linear in the dwelling count, so two risers' diversified loads can
-// never be added. Everything upstream adds {dwellings, plantLoad} and diversifies once, at the end.
+// never be added. Everything upstream adds these up and diversifies once, at the end.
+//
+//   dwellings  - head count, and ONLY used to pick the diversity factor
+//   demand     - MJ/hr of dwelling load, already multiplied by each riser's own demand/dwelling
+//   plantLoad  - MJ/hr of plant, which diversity never touches
+//
+// Keeping `demand` separate from `dwellings` is what lets one main serve risers with different
+// appliance loads: a 60 MJ/hr riser and a 40 MJ/hr riser contribute their own rates, while the
+// diversity factor still keys off the combined head count.
+function blankGasLoad(){ return {dwellings:0, demand:0, plantLoad:0, mixed:false}; }
+// MJ/hr per dwelling this load works out at, or null when it carries no dwellings
+function gasLoadRate(load){ return load && load.dwellings>0 ? load.demand/load.dwellings : null; }
 function riserGasLoad(node){
-  let dwellings=0, plantLoad=0;
+  const per = resolveGas(node).demandPerDwelling;
+  const load = blankGasLoad(); // one riser, one rate - never mixed on its own
   for(let i=riserStartIdx(node);i<node.data.length;i++){ const L=node.data[i]||{};
-    dwellings+=(+L.dwellings||0); plantLoad+=(+L.mj||0); }
-  return {dwellings, plantLoad};
+    const dw=+L.dwellings||0;
+    load.dwellings+=dw; load.demand+=dw*per; load.plantLoad+=(+L.mj||0); }
+  return load;
 }
-function addGasLoad(a,b){ return {dwellings:a.dwellings+b.dwellings, plantLoad:a.plantLoad+b.plantLoad}; }
-// one gas load -> MJ/hr and a pipe size, using this riser's (or the sheet's) settings
+// `mixed` records that the combined load spans more than one demand/dwelling, so a panel can say
+// "blended" instead of quoting a rate no riser actually uses. Sizing does not depend on it.
+function addGasLoad(a,b){
+  const ra=gasLoadRate(a), rb=gasLoadRate(b);
+  return {dwellings:a.dwellings+b.dwellings, demand:a.demand+b.demand,
+          plantLoad:a.plantLoad+b.plantLoad,
+          mixed: !!(a.mixed || b.mixed || (ra!=null && rb!=null && Math.abs(ra-rb)>1e-9))};
+}
+// one gas load -> MJ/hr and a pipe size. `g` supplies the table, index length, tolerance and the
+// diversity switch; the MJ/hr per dwelling is already baked into load.demand at its riser.
 function sizeGasLoad(load, g){
-  const mj = gasAdjusted(load.dwellings, g.demandPerDwelling, g.diversity, load.plantLoad);
+  const mj = gasAdjustedLoad(load, g.diversity);
   if(mj<=0) return {mj:0, dn:null, cap:null, unsized:true};
   const pick = selectGasPipe(mj*gasTolerance(g.tolerancePct), g.table, g.indexLength);
   return {mj, dn: pick?pick.DN:null, cap: pick?pick.cap:null, unsized:false, over: !pick};
@@ -637,17 +668,20 @@ function riserSegments(n, feed, exports, bot, top){
 // holds {dwellings, plantLoad} rather than L/s, for the same non-linearity reason.
 function riserGasSegments(n, feed, exports, bot, top){
   const g=resolveGas(n), s0=riserStartIdx(n);
-  const grp=(a,b)=>{ let load={dwellings:0,plantLoad:0};
+  // this riser's own levels are charged at THIS riser's rate; exported loads arrive already
+  // costed at theirs, so they are simply added on
+  const grp=(a,b)=>{ let load=blankGasLoad();
     for(let i=a;i<=b;i++){ const d= i>=s0 ? (n.data[i]||{}) : {};
-      load.dwellings+=(+d.dwellings||0); load.plantLoad+=(+d.mj||0);
+      const dw=+d.dwellings||0;
+      load.dwellings+=dw; load.demand+=dw*g.demandPerDwelling; load.plantLoad+=(+d.mj||0);
       const ex=exports[i]; if(ex) load=addGasLoad(load,ex); }
     return load; };
   const out=[];
   for(let i=bot;i<top;i++){
     const load = i>=feed ? grp(i+1,top) : grp(bot,i);
     const s=sizeGasLoad(load,g);
-    out.push({i, flow:s.mj, mj:s.mj, dwellings:load.dwellings, plantLoad:load.plantLoad,
-              dn:s.dn, cap:s.cap, vel:NaN, over: !s.unsized && s.over});
+    out.push({i, flow:s.mj, mj:s.mj, dwellings:load.dwellings, demand:load.demand,
+              plantLoad:load.plantLoad, dn:s.dn, cap:s.cap, vel:NaN, over: !s.unsized && s.over});
   }
   return out;
 }
@@ -864,24 +898,25 @@ function sizePipes(){
     // diversity once, at each pipe, to that pipe's own cumulative dwelling count. Summing
     // diversified demands instead (the water path below) would undersize every shared main,
     // because the diversity curve is steeply non-linear in the number of dwellings.
-    const load={}; curSvc().nodes.forEach(n=>load[n.id]= n.type==='riser'?riserGasLoad(n):{dwellings:0,plantLoad:0});
+    const load={}; curSvc().nodes.forEach(n=>load[n.id]= n.type==='riser'?riserGasLoad(n):blankGasLoad());
     for(let i=order.length-1;i>=0;i--){ const u=order[i]; if(parent[u]!=null){
       load[parent[u]]=addGasLoad(load[parent[u]], load[u]);
       const pn=getNode(parent[u]);
       if(pn&&pn.type==='riser'){ // load leaving this riser at the attachment level, to feed the subtree
         const lvl=clampLevel(pn, pAttU[u].level);
-        const cur=riserInfo[parent[u]].exports[lvl]||{dwellings:0,plantLoad:0};
+        const cur=riserInfo[parent[u]].exports[lvl]||blankGasLoad();
         riserInfo[parent[u]].exports[lvl]=addGasLoad(cur, load[u]);
       }
     }}
     curSvc().nodes.forEach(n=>{ const pp=pPipe[n.id]; if(!pp) return;
       const L=load[n.id];
       if(L.dwellings<=0 && L.plantLoad<=0) return;
-      // the run feeding a riser is sized on that riser's settings (the workbook keeps index length
-      // and demand/dwelling per riser); anything else — a shared main, a tee — uses the sheet's.
+      // The MJ/hr per dwelling is already in L.demand, charged at each riser's own rate, so a main
+      // serving a 40 and a 60 MJ/hr riser is correct. What is still taken from the riser (or, for
+      // a shared main or tee, from the sheet) is the table, index length, tolerance and diversity.
       const s=sizeGasLoad(L, resolveGas(n.type==='riser'?n:null));
-      res[pp.id]={flow:s.mj, mj:s.mj, dwellings:L.dwellings, plantLoad:L.plantLoad,
-                  dn:s.dn, cap:s.cap, vel:null, over:s.over, unsized:false};
+      res[pp.id]={flow:s.mj, mj:s.mj, dwellings:L.dwellings, demand:L.demand, plantLoad:L.plantLoad,
+                  mixed:L.mixed, dn:s.dn, cap:s.cap, vel:null, over:s.over, unsized:false};
     });
   } else {
   const demand={}; curSvc().nodes.forEach(n=>demand[n.id]= n.type==='riser'?riserBaseFlow(n):0);
@@ -923,7 +958,8 @@ function haloed(a){ return Object.assign({stroke:'#f7f8fa','stroke-width':3.5,'p
 function levelBranch(n,i){
   const d=n.data[i]||{};
   if(isGasSheet()){ // the level's own dwellings, diversified on that count alone, plus its plant load
-    const s=sizeGasLoad({dwellings:+d.dwellings||0, plantLoad:+d.mj||0}, resolveGas(n));
+    const g=resolveGas(n), dw=+d.dwellings||0;
+    const s=sizeGasLoad({dwellings:dw, demand:dw*g.demandPerDwelling, plantLoad:+d.mj||0}, g);
     return {flow:s.mj, mj:s.mj, dn:s.dn, cap:s.cap, over: s.unsized? false : s.over};
   }
   const flow=curDef().demand(+d.dwellings||0,+d.lu||0,+d.extra||0,+d.pump||0);
@@ -1723,8 +1759,13 @@ function renderGasPipePanel(r, body){
   const g=resolveGas(null), t=gasTable(g.table);
   const tol=gasTolerance(g.tolerancePct), need=(r.mj||0)*tol;
   const div = r.dwellings>0 ? (g.diversity? gasDiversity(r.dwellings) : 1) : null;
+  // the effective rate this run carries: one riser's own, or - when it serves risers set to
+  // different demand/dwelling - the blend, which is labelled rather than passed off as a setting
+  const rate = gasLoadRate(r);
+  const mixed = !!r.mixed;
   body.innerHTML=`<div class="readout">
     <div><span class="k">Dwellings served</span><span class="v">${r.dwellings!=null?r.dwellings:'—'}</span></div>
+    ${rate!=null?`<div><span class="k">Demand / dwelling</span><span class="v">${fmtMJ(rate)} MJ/hr${mixed?' (blended)':''}</span></div>`:''}
     ${div!=null?`<div><span class="k">Diversity factor</span><span class="v">${div.toFixed(3)}${g.diversity?'':' (off)'}</span></div>`:''}
     ${r.plantLoad>0?`<div><span class="k">Plant load</span><span class="v">${fmtMJ(r.plantLoad)} MJ/hr</span></div>`:''}
     <div><span class="k">Adjusted demand</span><span class="v">${r.mj!=null?fmtMJ(r.mj)+' MJ/hr':'—'}</span></div>
@@ -1752,7 +1793,7 @@ function renderGasPipePanel(r, body){
         ${row(idx,'— recommended')||'<div><span class="k">No size fits</span><span class="v warn">over capacity</span></div>'}
         ${row(idx+1,'— one size up')}
       </div>`; })()}
-  <p class="empty" style="margin-top:12px">Sized from AS 5601-2022 ${escapeHtml(t.label)} (${escapeHtml(t.range)}, ${t.drop} kPa drop, ${escapeHtml(t.material)}) at the sheet's index length. Diversity is applied once, to the dwellings this run serves — diversified loads are never added together.</p>
+  <p class="empty" style="margin-top:12px">Sized from AS 5601-2022 ${escapeHtml(t.label)} (${escapeHtml(t.range)}, ${t.drop} kPa drop, ${escapeHtml(t.material)}) at the sheet's index length. Diversity is applied once, to the dwellings this run serves — diversified loads are never added together.${mixed?' This run serves risers with different demand per dwelling, so the rate above is the blend; each riser contributes at its own.':''}</p>
   <button class="tool" style="margin-top:8px;width:100%;justify-content:center" onclick="deleteSelected()">🗑 Delete this pipe</button>`;
   appendAttachEditors(body);
 }
@@ -1976,8 +2017,9 @@ function renderRiserPanel(n,body){
     ${pressureReadout(pr)}`}
     <div class="sect">Demand per level (top first)</div>
     <div class="levels" id="levels"></div>
-    <div class="readout" style="margin-top:12px">
-      ${gasSheet? gasRiserReadout(n) : `<div><span class="k">Total riser flow</span><span class="v">${base.toFixed(3)} L/s</span></div>`}
+    ${gasSheet? `<div class="readout" id="gasout" style="margin-top:12px">${gasRiserReadout(n)}</div>` : ''}
+    <div class="readout" style="margin-top:${gasSheet?'8':'12'}px">
+      ${gasSheet? '' : `<div><span class="k">Total riser flow</span><span class="v">${base.toFixed(3)} L/s</span></div>`}
       <div><span class="k">Fed at</span><span class="v">${escapeHtml(feedName)}</span></div>
     </div>
     <p class="empty" style="margin-top:8px">Segments size away from the feed point. The riser spans from its lowest to highest level with demand — give a level ${gasSheet?'dwellings or a plant load':'dwellings/LU'} to extend it.</p>
@@ -2003,7 +2045,7 @@ function renderRiserPanel(n,body){
   const fsel=wrap.querySelector('#rflip'); fsel.value=n.flip?'right':'left';
   fsel.addEventListener('change',e=>{ n.flip = e.target.value==='right'; render(); });
   if(gasSheet){
-    bindGasFields(wrap, n.gas);
+    bindGasFields(wrap, n.gas, n);
   } else {
     wrap.querySelector('#rhwu').addEventListener('change',e=>{ n.hwu=e.target.checked||undefined; render(); });
     const matSel2=wrap.querySelector('#rmat'); matSel2.value=n.material||''; matSel2.addEventListener('change',e=>{ n.material=e.target.value; renderPanel(); render(); });
@@ -2083,15 +2125,29 @@ function gasFields(vals, inherited){
     </div>
     <p class="empty" style="margin-top:6px">Blank = inherited from the sheet (shown greyed). The tables are only tabulated at the listed index lengths, which is why it is a list and not a free number.</p>`;
 }
-function bindGasFields(wrap, target){
-  wrap.querySelectorAll('.gasf').forEach(inp=>inp.addEventListener('input',e=>{
-    target[e.target.dataset.gas]=e.target.value; renderPanel(); render(); }));
+// Bound WITHOUT renderPanel(): that does body.innerHTML='', which tears the field out of the
+// document mid-keystroke, so you get one character and lose focus. The per-level dwelling inputs
+// already avoid it the same way. Only the drawing and the two dependent readouts are refreshed.
+// (The R.L. fields above still have this defect - same one-line shape of fix.)
+function bindGasFields(wrap, target, node){
+  const refresh=()=>{
+    render();
+    const out=wrap.querySelector('#gasout'); if(out) out.innerHTML=gasRiserReadout(node);
+    const host=wrap.querySelector('#levels'); if(host) refreshLevelDNs(node,host);
+  };
+  wrap.querySelectorAll('.gasf').forEach(inp=>{
+    // selects fire both; number inputs only fire 'input'
+    ['input','change'].forEach(evt=>inp.addEventListener(evt,e=>{
+      target[e.target.dataset.gas]=e.target.value; refresh(); }));
+  });
 }
 // what this riser's own load comes to, and what its base segment ends up as
 function gasRiserReadout(n){
   const g=resolveGas(n), load=riserGasLoad(n), s=sizeGasLoad(load,g);
   const div = load.dwellings>0 ? (g.diversity? gasDiversity(load.dwellings) : 1) : null;
-  const rows=[['Dwellings served', String(load.dwellings)]];
+  const rows=[['Dwellings served', String(load.dwellings)],
+              ['Demand / dwelling', fmtMJ(g.demandPerDwelling)+' MJ/hr'
+                + (blank((n.gas||{}).demandPerDwelling) ? ' (sheet)' : ' (this riser)')]];
   if(div!=null) rows.push(['Diversity factor', div.toFixed(3)+(g.diversity?'':' (off)')]);
   if(load.plantLoad>0) rows.push(['Plant load', fmtMJ(load.plantLoad)+' MJ/hr']);
   rows.push(['Adjusted demand', fmtMJ(s.mj)+' MJ/hr']);
