@@ -876,7 +876,10 @@ function sizePipes(){
   const res={}; curSvc().pipes.forEach(p=>res[p.id]={flow:null,dn:null,vel:null,over:false,unsized:true});
   riserInfo={};
   curSvc().nodes.forEach(n=>{ if(n.type==='riser') riserInfo[n.id]={feed:null,feedPipe:null,exports:{}}; });
-  const sources=curSvc().nodes.filter(n=>n.type==='source'||n.type==='plant'); // hot-water plant feeds like a source
+  // A plant feeds the hot-water sheet, so there it behaves like a source. On the gas sheet the
+  // same box is the opposite thing — a terminal that BURNS gas — so gas must not treat it as an
+  // origin, or everything downstream of it would size off a phantom supply.
+  const sources=curSvc().nodes.filter(n=>n.type==='source' || (n.type==='plant' && !isGasSheet()));
   const adj={}; curSvc().nodes.forEach(n=>adj[n.id]=[]);
   curSvc().pipes.forEach(p=>{
     if(p.a&&p.b&&adj[p.a.node]&&adj[p.b.node]){
@@ -898,7 +901,13 @@ function sizePipes(){
     // diversity once, at each pipe, to that pipe's own cumulative dwelling count. Summing
     // diversified demands instead (the water path below) would undersize every shared main,
     // because the diversity curve is steeply non-linear in the number of dwellings.
-    const load={}; curSvc().nodes.forEach(n=>load[n.id]= n.type==='riser'?riserGasLoad(n):blankGasLoad());
+    // risers contribute dwellings + their own rate; a plant contributes its MJ/hr, undiversified
+    const load={}; curSvc().nodes.forEach(n=>{
+      if(n.type==='riser'){ load[n.id]=riserGasLoad(n); return; }
+      const L=blankGasLoad();
+      if(n.type==='plant') L.plantLoad=+n.gasLoad||0;
+      load[n.id]=L;
+    });
     for(let i=order.length-1;i>=0;i--){ const u=order[i]; if(parent[u]!=null){
       load[parent[u]]=addGasLoad(load[parent[u]], load[u]);
       const pn=getNode(parent[u]);
@@ -1186,11 +1195,17 @@ function render(){
       board.appendChild(g);
     } else if(n.type==='plant'){
       const g=el('g',{'data-node-id':n.id,style:'cursor:pointer'});
-      const w=132,h=46,x=n.x-w/2,y=n.y-h/2;
+      // On the gas sheet the box grows a third line for the load it draws — that figure is the
+      // whole reason the plant appears on this sheet, so it belongs on the drawing, not just the
+      // panel. The hot-water sheet keeps the original two-line box.
+      const gasLine = (isGasSheet() && +n.gasLoad>0) ? fmtMJ(+n.gasLoad)+' MJ/hr' : null;
+      const w=132,h=gasLine?60:46,x=n.x-w/2,y=n.y-h/2;
       g.appendChild(el('rect',{x:x-14,y:y-14,width:w+28,height:h+28,fill:'transparent'})); // forgiving hit area
       g.appendChild(el('rect',{x,y,width:w,height:h,rx:7,fill:'#8a4b2a',stroke:sel?'var(--sel)':'#5a2f16','stroke-width':sel?3:1.5}));
-      g.appendChild(txt(n.x,n.y-3,plantKicker(n),{'text-anchor':'middle','font-family':'var(--sans)','font-size':9,'letter-spacing':'.12em',fill:'#f3d9c4'}));
-      g.appendChild(txt(n.x,n.y+12,n.name,{'text-anchor':'middle','font-family':'var(--sans)','font-size':12,'font-weight':600,fill:'#fff'}));
+      const kickY = gasLine? n.y-10 : n.y-3, nameY = gasLine? n.y+5 : n.y+12;
+      g.appendChild(txt(n.x,kickY,plantKicker(n),{'text-anchor':'middle','font-family':'var(--sans)','font-size':9,'letter-spacing':'.12em',fill:'#f3d9c4'}));
+      g.appendChild(txt(n.x,nameY,n.name,{'text-anchor':'middle','font-family':'var(--sans)','font-size':12,'font-weight':600,fill:'#fff'}));
+      if(gasLine) g.appendChild(txt(n.x,n.y+20,gasLine,{'text-anchor':'middle','font-family':'var(--mono)','font-size':10,'font-weight':700,fill:'#ffd9a8'}));
       board.appendChild(g);
     } else if(n.type==='hwu'){
       // terminal box on the cold sheet: shows the cold feed reaches the hot-water unit.
@@ -1689,7 +1704,7 @@ function renderPanel(){
   if(ui.selKind==='node'){
     const n=getNode(ui.selId); if(!n){ selectNone(); return; }
     if(n.type==='riser'){ kicker.textContent='Riser'; title.textContent=n.name; renderRiserPanel(n,body); }
-    else if(n.type==='plant'){ kicker.textContent='HW Plant'; title.textContent=n.name; renderPlantPanel(n,body); }
+    else if(n.type==='plant'){ kicker.textContent=isGasSheet()?'Gas Plant':'HW Plant'; title.textContent=n.name; renderPlantPanel(n,body); }
     else if(n.type==='hwu'){ kicker.textContent='Hot Water Unit'; title.textContent=n.name; renderHwuPanel(n,body); }
     else if(n.type==='source'){ kicker.textContent='Source'; title.textContent=n.name; renderSourcePanel(n,body); }
     else { kicker.textContent='Tee / Junction'; title.textContent=n.name||'Tee'; renderNamePanel(n,body,'Label'); }
@@ -1873,6 +1888,8 @@ function remapAttachLevels(fn){
 
 function renderPlantPanel(n,body){
   if(!n.plantType) n.plantType='gas_central';
+  const gasSheet=isGasSheet();
+  const isElec=String(n.plantType||'').indexOf('elec')===0;
   const wrap=document.createElement('div');
   wrap.innerHTML=`<div class="row"><label>Plant name<input class="field" id="pname" value="${escapeHtml(n.name||'')}"></label></div>
     <div class="row"><label>Configuration
@@ -1883,18 +1900,45 @@ function renderPlantPanel(n,body){
         <option value="elec_individual">Electric · Individual</option>
       </select></label></div>
     <div class="row"><label>Gas load (MJ/hr)<input class="field" id="pgas" type="number" min="0" value="${n.gasLoad||0}"></label></div>
-    <p class="empty" style="margin-top:6px">The plant is the hot-water feed at the roof. Draw the flow main (<kbd>L</kbd>) from here down into each riser — connect at the top level so it feeds from the roof. Gas load is stored for the future gas schematic.</p>
+    ${gasSheet ? `
+    ${isElec ? '<p class="empty warn" style="margin-top:6px">⚠ This plant is set to <b>Electric</b>, so it draws no gas. Either change the configuration above or take it off the gas sheet.</p>' : ''}
+    <p class="empty" style="margin-top:6px">On this sheet the plant is a <b>load</b>, not a supply: draw the gas main (<kbd>L</kbd>) into it and every run upstream picks up its MJ/hr. The load is added <b>after</b> diversity — plant is a firm demand, so the dwelling curve never discounts it.</p>
+    <div class="sect">On the gas network</div>
+    ${gasPlantReadout(n)}` : `
+    <p class="empty" style="margin-top:6px">The plant is the hot-water feed at the roof. Draw the flow main (<kbd>L</kbd>) from here down into each riser — connect at the top level so it feeds from the roof. Its gas load is what the <b>Gas</b> sheet sizes for.</p>
     <div class="sect">Pressure &amp; pump duty</div>
     ${rlFields(supplyRl(), null)}
     ${supplySummary()}
-    <p class="empty" style="margin-top:8px">These feed every riser on the hot-water sheet; each riser can override them. Kept separate from the cold-water sheet's supply values.</p>
+    <p class="empty" style="margin-top:8px">These feed every riser on the hot-water sheet; each riser can override them. Kept separate from the cold-water sheet's supply values.</p>`}
     <button class="tool" style="margin-top:8px;width:100%;justify-content:center" id="delp">🗑 Delete plant</button>`;
   body.appendChild(wrap);
   wrap.querySelector('#pname').addEventListener('input',e=>{ n.name=e.target.value; document.getElementById('p-title').textContent=n.name; render(); });
-  bindRlFields(wrap, supplyRl());
-  const ps=wrap.querySelector('#ptype'); ps.value=n.plantType; ps.addEventListener('change',e=>{ n.plantType=e.target.value; render(); });
-  wrap.querySelector('#pgas').addEventListener('input',e=>{ n.gasLoad=parseFloat(e.target.value)||0; });
+  if(!gasSheet) bindRlFields(wrap, supplyRl());
+  const ps=wrap.querySelector('#ptype'); ps.value=n.plantType;
+  ps.addEventListener('change',e=>{ n.plantType=e.target.value; renderPanel(); render(); });
+  // render() matters here: on the gas sheet this number sizes every run upstream of the plant.
+  // renderPanel() is deliberately NOT called — it would wipe the field mid-keystroke.
+  wrap.querySelector('#pgas').addEventListener('input',e=>{
+    n.gasLoad=parseFloat(e.target.value)||0;
+    render();
+    const out=wrap.querySelector('#gasplantout'); if(out) out.innerHTML=gasPlantReadout(n,true);
+  });
   wrap.querySelector('#delp').addEventListener('click',deleteSelected);
+}
+// what the gas network makes of this plant: the load it adds and the run that feeds it
+function gasPlantReadout(n, inner){
+  const res=sizePipes();
+  let feed=null;
+  curSvc().pipes.forEach(p=>{ [p.a,p.b].forEach(att=>{ if(att&&att.node===n.id) feed=res[p.id]||feed; }); });
+  const rows=[['Gas load', fmtMJ(+n.gasLoad||0)+' MJ/hr']];
+  if(!feed) rows.push(['Feed', 'not connected — draw a run into it']);
+  else if(feed.unsized) rows.push(['Feed', 'no path from the gas supply']);
+  else {
+    rows.push(['Feed carries', fmtMJ(feed.mj)+' MJ/hr']);
+    rows.push(['Feed size', feed.dn? phi(feed.dn) : 'OVER CAPACITY']);
+  }
+  const body=rows.map(([k,v])=>`<div><span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(v)}</span></div>`).join('');
+  return inner? body : `<div class="readout" id="gasplantout">${body}</div>`;
 }
 // The HWU is a terminal, not a load: it records what the cold feed serves and cross-references the
 // hot-water sheet. Deliberately no demand field — cold-water sizes are unaffected by it.
@@ -2232,7 +2276,9 @@ document.querySelectorAll('[data-add]').forEach(btn=>btn.addEventListener('click
   if(type==='riser'){ openRiserDlg(); return; } // the dialog pushes its own step on Add
   pushUndo('add '+type);
   if(type==='plant'){
-    const node={id:nid(),type:'plant',x:snap(view.x+viewW()*0.4),y:snap(SHEET_TOP-14),name:'HW PLANT',plantType:'gas_central',gasLoad:0};
+    // same node either way — it just reads as a supply on the hot-water sheet and as a load on gas
+    const node={id:nid(),type:'plant',x:snap(view.x+viewW()*0.4),y:snap(SHEET_TOP-14),
+      name:isGasSheet()?'GAS PLANT':'HW PLANT',plantType:'gas_central',gasLoad:0};
     curSvc().nodes.push(node); selectNode_(node.id); return;
   }
   if(type==='hwu'){
@@ -2448,6 +2494,20 @@ function setupGasFromCW(auto){
     gas.pipes.push({id:nid(),pts:dedupe(pts),a:prevAtt,b:att});
     prevAtt=att; prevPt=q;
   });
+  // A gas-fired hot-water plant is a gas load, so bring it onto this sheet with its MJ/hr and run
+  // the riser up to it. Electric plant is skipped — there is nothing for it to do here.
+  const hwPlant=(state.services.hw.nodes||[]).find(n=>n.type==='plant'
+    && String(n.plantType||'').indexOf('gas')===0 && (+n.gasLoad||0)>0);
+  const risers=gas.nodes.filter(n=>n.type==='riser').sort((a,b)=>a.x-b.x);
+  if(hwPlant && risers.length){
+    const host=risers[risers.length-1];
+    const plant={id:nid(),type:'plant',x:host.x,y:snap(SHEET_TOP-14),
+      name:hwPlant.name||'HW PLANT', plantType:hwPlant.plantType, gasLoad:+hwPlant.gasLoad||0};
+    gas.nodes.push(plant);
+    const att={node:host.id,level:riserTopIdx(host)}, q=attachPoint(att);
+    gas.pipes.push({id:nid(),pts:dedupe([{x:plant.x,y:plant.y+30},{x:q.x,y:q.y}]),
+      a:{node:plant.id}, b:att});
+  }
 }
 function setMode(m){
   commitDraw(); // leaving draw mode abandons any draft — keep whatever it already committed undoable
@@ -2489,7 +2549,9 @@ function syncServiceUI(){
   document.documentElement.classList.toggle('svc-hw', hw);   // hot-water sheet renders red (see :root.svc-hw)
   document.documentElement.classList.toggle('svc-gas', gas); // gas sheet renders ochre
   const show=(sel,on)=>{ const e=document.querySelector(sel); if(e) e.style.display=on?'':'none'; };
-  show('[data-add="source"]', !hw); show('[data-add="plant"]', hw); show('#btn-hwsetup', hw);
+  show('[data-add="source"]', !hw); show('[data-add="plant"]', hw||gas); show('#btn-hwsetup', hw);
+  const plantBtn=document.querySelector('[data-add="plant"]');
+  if(plantBtn) plantBtn.textContent = gas ? '▧ Gas Plant' : '▧ HW Plant';
   show('[data-add="hwu"]', !hw && !gas); // the HWU is the cold sheet's view of the plant, so cold-only
   show('#btn-gassetup', gas);
   // gas sizes off the AS 5601 tables, so the material/velocity group and the water static-pressure

@@ -126,6 +126,7 @@ editor. What changes is the arithmetic.
 - The per-level table is **Dwellings + Plant MJ/hr** instead of Dwellings + LU.
 - Callouts read `Ø50` over `544 MJ/hr`. There is **no velocity** — the table's pressure-drop band
   already fixes it.
+- A **▧ Gas Plant** box can be placed on the sheet; it prints its own MJ/hr load.
 - Meter branches read `4 x GAS METERS`, with the same two-row cluster over 6.
 - The ◱ Pressure overlay is hidden: that engine is water static head.
 
@@ -155,6 +156,30 @@ workbook's `MAIN PIPE` sheet, which is what `tests/suite_perriser.js` asserts.
 
 > Rate is per riser, matching the workbook (its column D is a single `$D$4` per riser block). It is
 > **not** per level — a commercial ground floor at a different rate would need a new field.
+
+### Plant on the gas sheet
+
+The same **▧ Plant** box appears on the hot-water and gas sheets, and it means opposite things on
+each — so the sizing engine treats it differently:
+
+| | Hot water | Gas |
+|---|---|---|
+| Role | a **source** — the hot-water network starts here | a **load** — it burns gas |
+| In `sizePipes` | included in `sources`, feeds the BFS | excluded; contributes `plantLoad` instead |
+| Drawn | two-line box | three-line box, the third being its MJ/hr |
+
+Getting that backwards is the thing to watch: if a plant were left in `sources` on the gas sheet,
+every run beyond it would size off a supply that does not exist.
+
+Draw the gas main (`L`) into the plant and every run upstream picks up its MJ/hr. The load is
+added **after** diversity — plant is a firm demand and the dwelling curve must never discount it.
+Switching to an empty gas sheet carries a **gas-fired** hot-water plant across automatically, with
+its load and configuration, connected to the tallest riser's top level. Electric plant is skipped,
+and an electric plant sitting on the gas sheet is flagged in its panel.
+
+There are two ways to put plant load on the sheet, and both are legitimate: this plant box, or the
+**Plant MJ/hr** column on a riser's level table for something that hangs off that level. They add
+up the same way.
 
 > **Diversity is applied once, to the cumulative dwelling count, and diversified loads are never
 > added.** The curve is steeply non-linear (1 dwelling → 1.00, 67 → 0.203, 80+ → 0.195), so
@@ -326,7 +351,7 @@ deviation.
 **There is now a test folder, and it is committed.**
 
 ```
-py tests/run_all.py                # 132 assertions + the water regression diff
+py tests/run_all.py                # 168 assertions + the water regression diff
 py verify_against_workbook.py      # the reference data, against the workbook
 ```
 
@@ -418,7 +443,8 @@ which draws perfectly and undersizes the main.
   with the workbook's diversity curve; mirrors `GAS CALCS` for all 61 published rows and the
   `MAIN PIPE` sheet. Save format v6. Committed a `tests/` folder (109 assertions + a water
   regression diff) and extended `verify_against_workbook.py` with five gas checks. Demand per
-  dwelling is per riser, and mains serving risers at different rates blend them correctly. Fixed that
+  dwelling is per riser, and mains serving risers at different rates blend them correctly. A
+  gas-fired HW plant can be shown on the gas sheet, where it is a load rather than a source. Fixed that
   script's sheet and row lookups, which had been silently reading the wrong cells since the master
   gained an `RCW CALCS` sheet. Cold and hot water provably unchanged.
 - **2026-08-19 — HWU on the cold sheet** (`5b634b6`). Central `hwu` terminal node (config, model,
