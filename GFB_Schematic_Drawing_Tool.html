@@ -1068,6 +1068,10 @@ function fitView(){
 }
 
 function render(){
+  // The gas copy of a gas-fired plant is part of the document, so guarantee it here rather than
+  // relying on every edit path remembering to sync. syncGasPlants() no-ops when nothing changed,
+  // and returns immediately while `restoring` — undo must never resurrect a node it just removed.
+  if(isGasSheet()) syncGasPlants();
   curSvc().nodes.forEach(n=>{ if(n.type==='riser') syncRiserData(n); });
   const results=sizePipes();
   syncPressureBtn();
@@ -2648,7 +2652,13 @@ gasPerDwInp.addEventListener('input',()=>{ const v=parseFloat(gasPerDwInp.value)
   if(v>=0){ supplyGas().demandPerDwelling=v; renderPanel(); render(); }});
 gasDivBtn.addEventListener('click',()=>{ pushUndo('gas diversity'); const g=supplyGas();
   g.diversity=!g.diversity; syncGasToolbar(); renderPanel(); render(); });
-document.querySelectorAll('[data-svc]').forEach(b=>b.addEventListener('click',()=>switchService(b.getAttribute('data-svc'))));
+document.querySelectorAll('[data-svc]').forEach(b=>b.addEventListener('click',()=>{
+  const to=b.getAttribute('data-svc');
+  // switchService ignores a switch to the sheet you are already on, which left clicking the tab
+  // doing nothing at all — the natural thing to try when a sheet looks stale. Refresh instead.
+  if(to===state.activeService){ render(); return; }
+  switchService(to);
+}));
 
 function updateHint(){
   const h=document.getElementById('hint');

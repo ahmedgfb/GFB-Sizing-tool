@@ -193,10 +193,17 @@ No rebuild, and it does not wait for a load to be typed.
 - The copy arrives **unconnected**: it sits where the plant sits and the gas run into it is yours
   to draw, since any route the tool guessed would usually be wrong.
 
-It is called from the plant panel's handlers, the end of a plant drag, entry to the gas sheet, and
-`loadState` (so older files gain the copy). Deliberately **not** from `render()` or
-`syncServiceUI()`, which also run during undo — resurrecting a node someone just undid is worse
-than a briefly stale mirror; `syncGasPlants()` no-ops while `restoring`.
+**`render()` guarantees it.** The mirror is part of the document, so rather than relying on every
+edit path remembering to sync, `render()` calls `syncGasPlants()` whenever the gas sheet is shown.
+It is also called from the plant panel's handlers, the end of a plant drag, entry to the gas sheet
+and `loadState` (so older files gain the copy), but none of those are load-bearing any more.
+
+The one thing that must stay true: `syncGasPlants()` returns immediately while `restoring`, so the
+render inside `restoreDoc` cannot resurrect a node undo has just removed. Do not remove that guard.
+
+Clicking the sheet tab you are already on now re-renders instead of doing nothing — `switchService`
+ignores a switch to the current sheet, which left the obvious "this looks stale, let me click the
+tab" gesture with no effect.
 
 There are two ways to put plant load on the sheet, and both are legitimate: this plant box, or the
 **Plant MJ/hr** column on a riser's level table for something that hangs off that level. They add
@@ -372,7 +379,7 @@ deviation.
 **There is now a test folder, and it is committed.**
 
 ```
-py tests/run_all.py                # 184 assertions + the water regression diff
+py tests/run_all.py                # 192 assertions + the water regression diff
 py verify_against_workbook.py      # the reference data, against the workbook
 ```
 

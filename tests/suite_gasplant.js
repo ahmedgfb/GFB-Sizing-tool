@@ -192,3 +192,54 @@ syncGasPlants();
 var still=state.services.gas.nodes.filter(function(n){return n.type==='plant';})[0];
 ok('wired copy kept', !!still, true);
 ok('but no longer linked to anything', still.linkedTo, undefined);
+
+note('=== the mirror is guaranteed, not dependent on hitting the right edit path ===');
+// rebuild a clean job
+state.building={job:{name:'GUARD',number:'2'},
+  levels:['GROUND','LEVEL 1','LEVEL 2','ROOF'], groundIdx:0};
+switchService('cw');
+var cw2=curSvc(); cw2.nodes=[]; cw2.pipes=[]; state.nextId=1;
+var s2={id:nid(),type:'source',x:160,y:levelY(0)+56,name:'MAINS SUPPLY'};
+var r3={id:nid(),type:'riser',x:420,name:'CW RISER 1',start:0,
+  data:state.building.levels.map(function(){return blankLevel();}),rl:blankRl()};
+for(var k=0;k<4;k++) r3.data[k].dwellings=4;
+cw2.nodes.push(s2,r3);
+var aa={node:r3.id,level:0}, qq=attachPoint(aa);
+cw2.pipes.push({id:nid(),pts:[{x:s2.x,y:s2.y},{x:qq.x,y:s2.y},{x:qq.x,y:qq.y}],a:{node:s2.id},b:aa});
+state.services.hw.nodes=[]; state.services.hw.pipes=[];   // let the HW sheet rebuild itself
+state.services.gas.nodes=[]; state.services.gas.pipes=[];
+switchService('hw');
+var php=curSvc().nodes.filter(function(n){return n.type==='plant';})[0];
+ok('hot-water sheet rebuilt with a plant', !!php, true);
+php.gasLoad=0;                                   // a plant with no load typed yet
+switchService('gas');
+ok('mirror created even with a zero gas load',
+   curSvc().nodes.filter(function(n){return n.type==='plant';}).length, 1);
+
+note('--- stripped out behind the tool\u2019s back: a render puts it back ---');
+curSvc().nodes=curSvc().nodes.filter(function(n){return n.type!=='plant';});
+ok('gone', curSvc().nodes.filter(function(n){return n.type==='plant';}).length, 0);
+render();
+ok('render restores it', curSvc().nodes.filter(function(n){return n.type==='plant';}).length, 1);
+
+note('--- clicking the Gas tab you are already on refreshes rather than doing nothing ---');
+curSvc().nodes=curSvc().nodes.filter(function(n){return n.type!=='plant';});
+document.querySelector('[data-svc="gas"]').click();
+ok('tab click re-syncs', curSvc().nodes.filter(function(n){return n.type==='plant';}).length, 1);
+
+note('--- but undo must never resurrect it ---');
+selectNode_(curSvc().nodes.filter(function(n){return n.type==='plant';})[0].id);
+defer(function(){
+  // delete the hot-water plant: the unwired mirror goes too
+  switchService('hw');
+  var h=curSvc().nodes.filter(function(n){return n.type==='plant';})[0];
+  selectNode_(h.id); deleteSelected();
+  switchService('gas'); render();
+  ok('mirror removed with its plant', curSvc().nodes.filter(function(n){return n.type==='plant';}).length, 0);
+  defer(function(){
+    undo();                        // brings the hot-water plant back
+    ok('undo restored the hot-water plant',
+       state.services.hw.nodes.filter(function(n){return n.type==='plant';}).length, 1);
+    ok('and the sheets still render without throwing', typeof render(), 'undefined');
+  });
+});
